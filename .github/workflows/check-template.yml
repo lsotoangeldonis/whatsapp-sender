@@ -1,14 +1,19 @@
 name: Check Template Status
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      extra:
+        description: 'Query params extra, ej. plantilla=hello_world&idioma=en_US (para probar sin depender de recordatorio_clases)'
+        required: false
+        default: ''
 
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - name: Probar envio real con recordatorio_clases
+      - name: Probar envio real
         run: |
-          RESPUESTA=$(curl -s "https://whatsapp-sender.lsotoangeldonis.workers.dev/test?token=${{ secrets.TEST_TOKEN }}&fecha=2026-09-22")
+          RESPUESTA=$(curl -s "https://whatsapp-sender.lsotoangeldonis.workers.dev/test?token=${{ secrets.TEST_TOKEN }}&fecha=2026-09-22&${{ inputs.extra }}")
           echo "$RESPUESTA"
           echo "$RESPUESTA" | jq -e '.enviado == true'
