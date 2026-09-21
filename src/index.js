@@ -1,5 +1,3 @@
-import horario from '../horario.json';
-
 const MESES = [
   'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
   'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre',
@@ -19,7 +17,13 @@ function fechaLegible(fechaISO, prefijo) {
   return `${prefijo} ${diaSemana} ${dia} de ${MESES[mes - 1]}`;
 }
 
-function sesionesDelDia(fechaISO) {
+// El horario vive en Workers KV (clave "horario", JSON con el mismo
+// formato que antes tenía horario.json), no en el repositorio.
+async function obtenerHorario(env) {
+  return (await env.HORARIO_KV.get('horario', 'json')) || {};
+}
+
+function sesionesDelDia(horario, fechaISO) {
   return horario[fechaISO] || [];
 }
 
@@ -34,7 +38,8 @@ function hayEnVivo(sesiones) {
 }
 
 async function enviarRecordatorio(env, fechaISO, prefijo, opciones = {}) {
-  const sesiones = sesionesDelDia(fechaISO);
+  const horario = await obtenerHorario(env);
+  const sesiones = sesionesDelDia(horario, fechaISO);
   if (sesiones.length === 0) {
     return { enviado: false, motivo: 'sin_clases', fecha: fechaISO };
   }

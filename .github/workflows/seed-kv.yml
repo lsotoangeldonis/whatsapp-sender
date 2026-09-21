@@ -1,0 +1,22 @@
+name: Seed KV Horario
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Escribir horario temporal desde el secret
+        run: printf '%s' "$HORARIO_JSON" > /tmp/horario.json
+        env:
+          HORARIO_JSON: ${{ secrets.HORARIO_JSON }}
+
+      - name: Subir a Workers KV
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: kv key put --binding=HORARIO_KV horario --path=/tmp/horario.json --remote
