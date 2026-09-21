@@ -69,6 +69,35 @@ npm install
 
 ## Fase C — Credenciales y despliegue
 
+### Opción A (recomendada): despliegue automático con GitHub Actions
+
+El workflow `.github/workflows/deploy.yml` despliega el Worker en cada push a
+`main`, o manualmente desde la pestaña **Actions** del repo (botón
+"Run workflow"). Corre en los servidores de GitHub, así que no depende de tu
+máquina ni de la red de quien lo ejecute.
+
+1. En GitHub: **Settings → Secrets and variables → Actions → New repository
+   secret**, y agrega estos 8 secrets (nunca quedan visibles después de
+   guardarlos, ni en los logs del workflow):
+
+   | Secret | Valor |
+   |---|---|
+   | `CLOUDFLARE_API_TOKEN` | El API Token creado en Cloudflare (plantilla "Edit Cloudflare Workers") |
+   | `CLOUDFLARE_ACCOUNT_ID` | Tu Account ID de Cloudflare |
+   | `WHATSAPP_TOKEN` | Token permanente del usuario del sistema (Fase A.5) |
+   | `PHONE_NUMBER_ID` | De la pantalla API Setup |
+   | `DESTINATARIO` | Tu número, formato internacional sin `+` (ej. `51987654321`) |
+   | `TEST_TOKEN` | Uno propio, aleatorio, para proteger el endpoint `/test` |
+   | `WHATSAPP_TEMPLATE_NAME` | Nombre de la plantilla aprobada (ej. `recordatorio_clases`) |
+   | `WHATSAPP_TEMPLATE_LANG` | Código de idioma de la plantilla (ej. `es`) |
+
+2. Ve a la pestaña **Actions → Deploy Worker → Run workflow**, elige esta
+   rama y ejecútalo. También se dispara solo en cada push a `main`.
+3. Revisa el log del job: la acción `cloudflare/wrangler-action` imprime la
+   URL del Worker desplegado (`https://whatsapp-sender.<tu-subdominio>.workers.dev`).
+
+### Opción B: desde tu propia terminal
+
 ```bash
 npx wrangler login
 
