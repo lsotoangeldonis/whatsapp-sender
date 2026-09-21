@@ -28,14 +28,23 @@ Se incluyen **todas** las sesiones (EN VIVO y Asesoría) del día correspondient
    **Si esto no llega, no sigas** — el problema está en la configuración de
    Meta, no en el código.
 4. Crea una **plantilla de utilidad** en Meta Business Manager (categoría
-   *Utility*) con dos variables, por ejemplo:
+   *Utility*) con dos variables:
 
    ```
    Nombre: recordatorio_clases
    Idioma: es
-   Cuerpo: {{1}}:
-   {{2}}
+   Cuerpo:
+   Recordatorio de clases 📚
+   {{1}}: {{2}}
+   Mensaje automático de tu horario del periodo 202602.
    ```
+
+   - `{{1}}` es el día en texto: `Hoy martes 22 de septiembre` o
+     `Mañana martes 22 de septiembre`.
+   - `{{2}}` es la lista de sesiones **en una sola línea**, separadas por
+     ` · ` — Meta rechaza (error 132018) parámetros de plantilla con saltos
+     de línea, tabs o más de 4 espacios seguidos. Ejemplo:
+     `18:00–19:30 Análisis Integral en 3D (Asesoría) · 21:20–22:50 Programación Estructurada (Asesoría)`.
 
    Las plantillas de utilidad suelen aprobarse en minutos u horas. El nombre
    debe coincidir con `WHATSAPP_TEMPLATE_NAME` (por defecto

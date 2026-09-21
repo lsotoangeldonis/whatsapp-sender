@@ -24,7 +24,9 @@ function sesionesDelDia(fechaISO) {
 }
 
 function formatearSesiones(sesiones) {
-  return sesiones.map((s) => `• ${s.inicio}–${s.fin} — ${s.curso} (${s.tipo})`).join('\n');
+  // Meta rechaza (error 132018) parámetros de plantilla con saltos de línea,
+  // tabs o más de 4 espacios seguidos: todo va en una sola línea.
+  return sesiones.map((s) => `${s.inicio}–${s.fin} ${s.curso} (${s.tipo})`).join(' · ');
 }
 
 function hayEnVivo(sesiones) {
@@ -38,7 +40,7 @@ async function enviarRecordatorio(env, fechaISO, prefijo) {
   }
 
   const encabezado = fechaLegible(fechaISO, prefijo);
-  const cuerpo = formatearSesiones(sesiones) + (hayEnVivo(sesiones) ? '' : '\n⚠️ Ninguna es EN VIVO.');
+  const cuerpo = formatearSesiones(sesiones) + (hayEnVivo(sesiones) ? '' : ' · ⚠️ Ninguna es EN VIVO.');
 
   const payload = {
     messaging_product: 'whatsapp',
@@ -115,7 +117,9 @@ export default {
 
     const fechaParam = url.searchParams.get('fecha');
     const fechaObjetivo = fechaParam || fechaISOLima();
-    const prefijo = fechaParam ? '' : 'Hoy';
+    // {{1}} siempre es "Hoy <fecha>" o "Mañana <fecha>"; por defecto "Hoy",
+    // salvo que se pida explícitamente lo contrario con ?prefijo=Mañana
+    const prefijo = url.searchParams.get('prefijo') || 'Hoy';
 
     const resultado = await enviarRecordatorio(env, fechaObjetivo, prefijo);
     return new Response(JSON.stringify(resultado, null, 2), {
