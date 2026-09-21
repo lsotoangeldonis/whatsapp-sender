@@ -19,4 +19,4 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: kv key put --binding=HORARIO_KV horario --path=/tmp/horario.json --remote
+          command: kv key put --binding=HORARIO_KV horario --path=/tmp/horario.json
