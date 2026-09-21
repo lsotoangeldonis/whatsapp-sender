@@ -33,7 +33,7 @@ function hayEnVivo(sesiones) {
   return sesiones.some((s) => s.tipo === 'EN VIVO');
 }
 
-async function enviarRecordatorio(env, fechaISO, prefijo) {
+async function enviarRecordatorio(env, fechaISO, prefijo, opciones = {}) {
   const sesiones = sesionesDelDia(fechaISO);
   if (sesiones.length === 0) {
     return { enviado: false, motivo: 'sin_clases', fecha: fechaISO };
@@ -42,23 +42,30 @@ async function enviarRecordatorio(env, fechaISO, prefijo) {
   const encabezado = fechaLegible(fechaISO, prefijo);
   const cuerpo = formatearSesiones(sesiones) + (hayEnVivo(sesiones) ? '' : ' · ⚠️ Ninguna es EN VIVO.');
 
+  const template = {
+    name: opciones.plantilla || env.WHATSAPP_TEMPLATE_NAME || 'recordatorio_clases',
+    language: { code: opciones.idioma || env.WHATSAPP_TEMPLATE_LANG || 'es' },
+  };
+
+  // opciones.sinParametros: para probar con una plantilla activa sin
+  // variables (ej. hello_world) mientras la propia está en revisión.
+  if (!opciones.sinParametros) {
+    template.components = [
+      {
+        type: 'body',
+        parameters: [
+          { type: 'text', text: encabezado },
+          { type: 'text', text: cuerpo },
+        ],
+      },
+    ];
+  }
+
   const payload = {
     messaging_product: 'whatsapp',
     to: env.DESTINATARIO,
     type: 'template',
-    template: {
-      name: env.WHATSAPP_TEMPLATE_NAME || 'recordatorio_clases',
-      language: { code: env.WHATSAPP_TEMPLATE_LANG || 'es' },
-      components: [
-        {
-          type: 'body',
-          parameters: [
-            { type: 'text', text: encabezado },
-            { type: 'text', text: cuerpo },
-          ],
-        },
-      ],
-    },
+    template,
   };
 
   let respuesta;
@@ -121,7 +128,15 @@ export default {
     // salvo que se pida explícitamente lo contrario con ?prefijo=Mañana
     const prefijo = url.searchParams.get('prefijo') || 'Hoy';
 
-    const resultado = await enviarRecordatorio(env, fechaObjetivo, prefijo);
+    // Override temporal para probar con una plantilla ya activa (ej.
+    // hello_world) mientras la propia sigue en revisión en Meta:
+    // /test?token=...&plantilla=hello_world&idioma=en_US
+    const plantillaOverride = url.searchParams.get('plantilla');
+    const opciones = plantillaOverride
+      ? { plantilla: plantillaOverride, idioma: url.searchParams.get('idioma') || 'en_US', sinParametros: true }
+      : {};
+
+    const resultado = await enviarRecordatorio(env, fechaObjetivo, prefijo, opciones);
     return new Response(JSON.stringify(resultado, null, 2), {
       headers: { 'Content-Type': 'application/json' },
       status: resultado.enviado || resultado.motivo === 'sin_clases' ? 200 : 502,
