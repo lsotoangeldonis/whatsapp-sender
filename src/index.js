@@ -63,7 +63,7 @@ async function enviarRecordatorio(env, fechaISO, prefijo) {
 
   let respuesta;
   try {
-    respuesta = await fetch(`https://graph.facebook.com/v21.0/${env.PHONE_NUMBER_ID}/messages`, {
+    respuesta = await fetch(`https://graph.facebook.com/v25.0/${env.PHONE_NUMBER_ID}/messages`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${env.WHATSAPP_TOKEN}`,

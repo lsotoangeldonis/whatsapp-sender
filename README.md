@@ -88,7 +88,7 @@ npm run deploy
 2. **Credenciales desde la terminal**:
 
    ```bash
-   curl -X POST "https://graph.facebook.com/v21.0/<PHONE_NUMBER_ID>/messages" \
+   curl -X POST "https://graph.facebook.com/v25.0/<PHONE_NUMBER_ID>/messages" \
      -H "Authorization: Bearer <WHATSAPP_TOKEN>" \
      -H "Content-Type: application/json" \
      -d '{"messaging_product":"whatsapp","to":"<DESTINATARIO>","type":"template","template":{"name":"hello_world","language":{"code":"en_US"}}}'
