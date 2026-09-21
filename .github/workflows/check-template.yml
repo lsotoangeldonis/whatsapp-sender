@@ -1,0 +1,14 @@
+name: Check Template Status
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probar envio real con recordatorio_clases
+        run: |
+          RESPUESTA=$(curl -s "https://whatsapp-sender.lsotoangeldonis.workers.dev/test?token=${{ secrets.TEST_TOKEN }}&fecha=2026-09-22")
+          echo "$RESPUESTA"
+          echo "$RESPUESTA" | jq -e '.enviado == true'
