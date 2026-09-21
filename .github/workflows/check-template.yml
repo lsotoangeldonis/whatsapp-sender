@@ -1,6 +1,8 @@
 name: Check Template Status
 
 on:
+  schedule:
+    - cron: '*/20 * * * *'
   workflow_dispatch:
     inputs:
       extra:
@@ -14,6 +16,13 @@ jobs:
     steps:
       - name: Probar envio real
         run: |
-          RESPUESTA=$(curl -s "https://whatsapp-sender.lsotoangeldonis.workers.dev/test?token=${{ secrets.TEST_TOKEN }}&fecha=2026-09-22&${{ inputs.extra }}")
+          RESPUESTA=$(curl -s "https://whatsapp-sender.lsotoangeldonis.workers.dev/test?token=${{ secrets.TEST_TOKEN }}&fecha=2026-09-22&${{ github.event.inputs.extra }}")
           echo "$RESPUESTA"
-          echo "$RESPUESTA" | jq -e '.enviado == true'
+          if echo "$RESPUESTA" | jq -e '.enviado == true' > /dev/null 2>&1; then
+            echo "### ✅ Plantilla aprobada — mensaje real enviado" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### ⏳ Plantilla todavía en revisión" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          echo "$RESPUESTA" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
