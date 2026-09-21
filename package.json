@@ -1,0 +1,15 @@
+{
+  "name": "whatsapp-sender",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Recordatorio diario de clases por WhatsApp usando un Cloudflare Worker con Cron Triggers.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "dev:cron": "wrangler dev --test-scheduled",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

@@ -1,0 +1,192 @@
+{
+  "2026-09-02": [
+    { "curso": "Inglés II", "inicio": "18:15", "fin": "21:15", "tipo": "EN VIVO" }
+  ],
+  "2026-09-03": [
+    { "curso": "Programación Estructurada", "inicio": "19:00", "fin": "22:00", "tipo": "EN VIVO" }
+  ],
+  "2026-09-05": [
+    { "curso": "Análisis Integral en 3D", "inicio": "14:00", "fin": "17:00", "tipo": "EN VIVO" }
+  ],
+  "2026-09-08": [
+    { "curso": "Análisis Integral en 3D", "inicio": "18:00", "fin": "19:30", "tipo": "Asesoría" },
+    { "curso": "Programación Estructurada", "inicio": "21:20", "fin": "22:50", "tipo": "Asesoría" }
+  ],
+  "2026-09-09": [
+    { "curso": "Inglés II", "inicio": "18:15", "fin": "21:15", "tipo": "EN VIVO" }
+  ],
+  "2026-09-10": [
+    { "curso": "Programación Estructurada", "inicio": "19:00", "fin": "22:00", "tipo": "EN VIVO" }
+  ],
+  "2026-09-12": [
+    { "curso": "Análisis Integral en 3D", "inicio": "14:00", "fin": "17:00", "tipo": "EN VIVO" }
+  ],
+  "2026-09-15": [
+    { "curso": "Análisis Integral en 3D", "inicio": "18:00", "fin": "19:30", "tipo": "Asesoría" },
+    { "curso": "Programación Estructurada", "inicio": "21:20", "fin": "22:50", "tipo": "Asesoría" }
+  ],
+  "2026-09-16": [
+    { "curso": "Inglés II", "inicio": "18:15", "fin": "21:15", "tipo": "EN VIVO" }
+  ],
+  "2026-09-17": [
+    { "curso": "Programación Estructurada", "inicio": "19:00", "fin": "22:00", "tipo": "EN VIVO" }
+  ],
+  "2026-09-19": [
+    { "curso": "Análisis Integral en 3D", "inicio": "14:00", "fin": "17:00", "tipo": "EN VIVO" }
+  ],
+  "2026-09-22": [
+    { "curso": "Análisis Integral en 3D", "inicio": "18:00", "fin": "19:30", "tipo": "Asesoría" },
+    { "curso": "Programación Estructurada", "inicio": "21:20", "fin": "22:50", "tipo": "Asesoría" }
+  ],
+  "2026-09-23": [
+    { "curso": "Inglés II", "inicio": "18:15", "fin": "21:15", "tipo": "EN VIVO" }
+  ],
+  "2026-09-24": [
+    { "curso": "Programación Estructurada", "inicio": "19:00", "fin": "22:00", "tipo": "EN VIVO" }
+  ],
+  "2026-09-26": [
+    { "curso": "Análisis Integral en 3D", "inicio": "14:00", "fin": "17:00", "tipo": "EN VIVO" }
+  ],
+  "2026-09-29": [
+    { "curso": "Análisis Integral en 3D", "inicio": "18:00", "fin": "19:30", "tipo": "Asesoría" },
+    { "curso": "Programación Estructurada", "inicio": "21:20", "fin": "22:50", "tipo": "Asesoría" }
+  ],
+  "2026-09-30": [
+    { "curso": "Inglés II", "inicio": "18:15", "fin": "21:15", "tipo": "EN VIVO" }
+  ],
+  "2026-10-01": [
+    { "curso": "Programación Estructurada", "inicio": "19:00", "fin": "22:00", "tipo": "EN VIVO" }
+  ],
+  "2026-10-03": [
+    { "curso": "Análisis Integral en 3D", "inicio": "14:00", "fin": "17:00", "tipo": "EN VIVO" }
+  ],
+  "2026-10-06": [
+    { "curso": "Análisis Integral en 3D", "inicio": "18:00", "fin": "19:30", "tipo": "Asesoría" },
+    { "curso": "Programación Estructurada", "inicio": "21:20", "fin": "22:50", "tipo": "Asesoría" }
+  ],
+  "2026-10-07": [
+    { "curso": "Inglés II", "inicio": "18:15", "fin": "21:15", "tipo": "EN VIVO" }
+  ],
+  "2026-10-10": [
+    { "curso": "Análisis Integral en 3D", "inicio": "14:00", "fin": "17:00", "tipo": "EN VIVO" }
+  ],
+  "2026-10-13": [
+    { "curso": "Análisis Integral en 3D", "inicio": "18:00", "fin": "19:30", "tipo": "Asesoría" },
+    { "curso": "Programación Estructurada", "inicio": "21:20", "fin": "22:50", "tipo": "Asesoría" }
+  ],
+  "2026-10-14": [
+    { "curso": "Inglés II", "inicio": "18:15", "fin": "21:15", "tipo": "EN VIVO" }
+  ],
+  "2026-10-15": [
+    { "curso": "Programación Estructurada", "inicio": "19:00", "fin": "22:00", "tipo": "EN VIVO" }
+  ],
+  "2026-10-17": [
+    { "curso": "Análisis Integral en 3D", "inicio": "14:00", "fin": "17:00", "tipo": "EN VIVO" }
+  ],
+  "2026-10-20": [
+    { "curso": "Análisis Integral en 3D", "inicio": "18:00", "fin": "19:30", "tipo": "Asesoría" },
+    { "curso": "Programación Estructurada", "inicio": "21:20", "fin": "22:50", "tipo": "Asesoría" }
+  ],
+  "2026-10-21": [
+    { "curso": "Inglés II", "inicio": "18:15", "fin": "21:15", "tipo": "EN VIVO" }
+  ],
+  "2026-10-22": [
+    { "curso": "Programación Estructurada", "inicio": "19:00", "fin": "22:00", "tipo": "EN VIVO" }
+  ],
+  "2026-10-24": [
+    { "curso": "Análisis Integral en 3D", "inicio": "14:00", "fin": "17:00", "tipo": "EN VIVO" }
+  ],
+  "2026-10-28": [
+    { "curso": "Inglés II", "inicio": "18:15", "fin": "21:15", "tipo": "EN VIVO" }
+  ],
+  "2026-10-29": [
+    { "curso": "Ciudadanía Ética", "inicio": "19:00", "fin": "22:00", "tipo": "EN VIVO" }
+  ],
+  "2026-10-31": [
+    { "curso": "Principios Físicos para Ingeniería", "inicio": "17:10", "fin": "20:10", "tipo": "EN VIVO" }
+  ],
+  "2026-11-03": [
+    { "curso": "Principios Físicos para Ingeniería", "inicio": "18:00", "fin": "19:30", "tipo": "Asesoría" },
+    { "curso": "Ciudadanía Ética", "inicio": "19:40", "fin": "21:10", "tipo": "Asesoría" }
+  ],
+  "2026-11-04": [
+    { "curso": "Inglés II", "inicio": "18:15", "fin": "21:15", "tipo": "EN VIVO" }
+  ],
+  "2026-11-05": [
+    { "curso": "Ciudadanía Ética", "inicio": "19:00", "fin": "22:00", "tipo": "EN VIVO" }
+  ],
+  "2026-11-07": [
+    { "curso": "Principios Físicos para Ingeniería", "inicio": "17:10", "fin": "20:10", "tipo": "EN VIVO" }
+  ],
+  "2026-11-10": [
+    { "curso": "Principios Físicos para Ingeniería", "inicio": "18:00", "fin": "19:30", "tipo": "Asesoría" },
+    { "curso": "Ciudadanía Ética", "inicio": "19:40", "fin": "21:10", "tipo": "Asesoría" }
+  ],
+  "2026-11-11": [
+    { "curso": "Inglés II", "inicio": "18:15", "fin": "21:15", "tipo": "EN VIVO" }
+  ],
+  "2026-11-12": [
+    { "curso": "Ciudadanía Ética", "inicio": "19:00", "fin": "22:00", "tipo": "EN VIVO" }
+  ],
+  "2026-11-14": [
+    { "curso": "Principios Físicos para Ingeniería", "inicio": "17:10", "fin": "20:10", "tipo": "EN VIVO" }
+  ],
+  "2026-11-17": [
+    { "curso": "Principios Físicos para Ingeniería", "inicio": "18:00", "fin": "19:30", "tipo": "Asesoría" },
+    { "curso": "Ciudadanía Ética", "inicio": "19:40", "fin": "21:10", "tipo": "Asesoría" }
+  ],
+  "2026-11-18": [
+    { "curso": "Inglés II", "inicio": "18:15", "fin": "21:15", "tipo": "EN VIVO" }
+  ],
+  "2026-11-19": [
+    { "curso": "Ciudadanía Ética", "inicio": "19:00", "fin": "22:00", "tipo": "EN VIVO" }
+  ],
+  "2026-11-21": [
+    { "curso": "Principios Físicos para Ingeniería", "inicio": "17:10", "fin": "20:10", "tipo": "EN VIVO" }
+  ],
+  "2026-11-24": [
+    { "curso": "Principios Físicos para Ingeniería", "inicio": "18:00", "fin": "19:30", "tipo": "Asesoría" },
+    { "curso": "Ciudadanía Ética", "inicio": "19:40", "fin": "21:10", "tipo": "Asesoría" }
+  ],
+  "2026-11-25": [
+    { "curso": "Inglés II", "inicio": "18:15", "fin": "21:15", "tipo": "EN VIVO" }
+  ],
+  "2026-11-26": [
+    { "curso": "Ciudadanía Ética", "inicio": "19:00", "fin": "22:00", "tipo": "EN VIVO" }
+  ],
+  "2026-11-28": [
+    { "curso": "Principios Físicos para Ingeniería", "inicio": "17:10", "fin": "20:10", "tipo": "EN VIVO" }
+  ],
+  "2026-12-01": [
+    { "curso": "Principios Físicos para Ingeniería", "inicio": "18:00", "fin": "19:30", "tipo": "Asesoría" },
+    { "curso": "Ciudadanía Ética", "inicio": "19:40", "fin": "21:10", "tipo": "Asesoría" }
+  ],
+  "2026-12-02": [
+    { "curso": "Inglés II", "inicio": "18:15", "fin": "21:15", "tipo": "EN VIVO" }
+  ],
+  "2026-12-03": [
+    { "curso": "Ciudadanía Ética", "inicio": "19:00", "fin": "22:00", "tipo": "EN VIVO" }
+  ],
+  "2026-12-05": [
+    { "curso": "Principios Físicos para Ingeniería", "inicio": "17:10", "fin": "20:10", "tipo": "EN VIVO" }
+  ],
+  "2026-12-10": [
+    { "curso": "Ciudadanía Ética", "inicio": "19:00", "fin": "22:00", "tipo": "EN VIVO" }
+  ],
+  "2026-12-12": [
+    { "curso": "Principios Físicos para Ingeniería", "inicio": "17:10", "fin": "20:10", "tipo": "EN VIVO" }
+  ],
+  "2026-12-15": [
+    { "curso": "Principios Físicos para Ingeniería", "inicio": "18:00", "fin": "19:30", "tipo": "Asesoría" },
+    { "curso": "Ciudadanía Ética", "inicio": "19:40", "fin": "21:10", "tipo": "Asesoría" }
+  ],
+  "2026-12-16": [
+    { "curso": "Inglés II", "inicio": "18:15", "fin": "21:15", "tipo": "EN VIVO" }
+  ],
+  "2026-12-17": [
+    { "curso": "Ciudadanía Ética", "inicio": "19:00", "fin": "22:00", "tipo": "EN VIVO" }
+  ],
+  "2026-12-19": [
+    { "curso": "Principios Físicos para Ingeniería", "inicio": "17:10", "fin": "20:10", "tipo": "EN VIVO" }
+  ]
+}
