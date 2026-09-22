@@ -182,8 +182,45 @@ async function verificarAlertaPago(env) {
 // Palabras que muestran el menú interactivo en vez de ir directo a Claude
 const PALABRAS_MENU = new Set(['menu', 'menú', 'hola', 'inicio', 'ayuda']);
 
+// Meta firma cada callback con HMAC-SHA256 del cuerpo crudo usando el App
+// Secret. Sin verificarlo, cualquiera que descubra la URL del Worker puede
+// falsificar mensajes por POST sin pasar por WhatsApp.
+async function firmaValida(env, cuerpoCrudo, cabecera) {
+  if (!env.META_APP_SECRET || !cabecera?.startsWith('sha256=')) return false;
+
+  const firmaRecibida = hexABytes(cabecera.slice('sha256='.length));
+  if (!firmaRecibida) return false;
+
+  const clave = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(env.META_APP_SECRET),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['verify']
+  );
+  // crypto.subtle.verify compara en tiempo constante.
+  return crypto.subtle.verify('HMAC', clave, firmaRecibida, cuerpoCrudo);
+}
+
+// SHA-256 son 32 bytes, o sea exactamente 64 caracteres hex.
+function hexABytes(hex) {
+  if (hex.length !== 64 || !/^[0-9a-f]+$/i.test(hex)) return null;
+  const bytes = new Uint8Array(32);
+  for (let i = 0; i < 32; i++) bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  return bytes;
+}
+
 async function manejarMensajeEntrante(env, mensaje) {
   const para = mensaje.from;
+
+  // El bot atiende solo a su dueño. Cualquier otro número que consiga el
+  // número del bot podría leer horario/notas/pagos y gastar la cuota de la
+  // API de Claude, así que se descarta en silencio (sin responder, para no
+  // confirmar siquiera que el número está activo).
+  if (para !== env.DESTINATARIO) {
+    console.warn('Mensaje descartado: número no autorizado', para);
+    return;
+  }
 
   if (mensaje.type === 'interactive' && mensaje.interactive?.type === 'list_reply') {
     await manejarOpcionMenu(env, para, mensaje.interactive.list_reply.id);
@@ -237,7 +274,15 @@ export default {
       }
 
       if (request.method === 'POST') {
-        const cuerpo = await request.json();
+        // El HMAC se calcula sobre los bytes crudos: hay que leerlos antes
+        // de parsear el JSON, y verificar antes de tocar el contenido.
+        const cuerpoCrudo = await request.arrayBuffer();
+        if (!(await firmaValida(env, cuerpoCrudo, request.headers.get('x-hub-signature-256')))) {
+          console.warn('Webhook descartado: firma ausente o inválida');
+          return new Response('Forbidden', { status: 403 });
+        }
+
+        const cuerpo = JSON.parse(new TextDecoder().decode(cuerpoCrudo));
         const mensaje = cuerpo.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
         if (mensaje) {
           ctx.waitUntil(manejarMensajeEntrante(env, mensaje));

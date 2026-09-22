@@ -79,6 +79,9 @@ lejos del límite.
 Escribir **"menu"** (o "menú", "hola", "inicio", "ayuda") muestra el menú
 principal. Cualquier otro texto libre se manda a Claude con tool-calling.
 
+El bot responde **únicamente al número configurado en `DESTINATARIO`**:
+cualquier mensaje de otro número se descarta en silencio (ver "Seguridad").
+
 ### Menú principal
 
 Mensaje interactivo tipo **lista** (WhatsApp limita a **10 filas en total**
@@ -304,6 +307,51 @@ en paralelo con `getCurriculaAlumno`, cada vez que se llama
    responde `Unsupported post request. Object with ID '...' does not
    exist...` (code 100, subcode 33) — hay que usar el WABA ID, no el
    Phone Number ID.
+5. Copia la **clave secreta de la app** (App Dashboard → Configuración →
+   Básica → "Clave secreta de la aplicación" → Mostrar) al secret
+   `META_APP_SECRET`. Es lo que permite verificar que cada POST al webhook
+   viene realmente de Meta — ver "Seguridad" abajo.
+
+## Seguridad
+
+La URL del Worker es pública por diseño (Meta necesita poder llamarla) y el
+número del bot es visible para cualquiera que reciba un mensaje suyo, así
+que el control de acceso está en el código, en dos capas independientes:
+
+**1. Verificación de la firma de Meta (`X-Hub-Signature-256`).** Cada
+callback real de Meta viene firmado con un HMAC-SHA256 del cuerpo crudo,
+usando el App Secret. El Worker recalcula ese HMAC y lo compara con
+`crypto.subtle.verify` (comparación en tiempo constante) **antes** de
+parsear el JSON o tocar su contenido; si no coincide, responde 403 y no
+hace nada más. Sin esto, cualquiera que descubriera la URL podría mandar
+un POST falsificado por `curl`, inventando el campo `from`, sin pasar por
+WhatsApp. Falla cerrado: si `META_APP_SECRET` no está configurado, ningún
+POST se procesa.
+
+**2. Allowlist del remitente.** `manejarMensajeEntrante` descarta en
+silencio cualquier mensaje cuyo `from` no sea exactamente `DESTINATARIO`.
+Se descarta sin responder, a propósito: contestar "no autorizado"
+confirmaría que el número está activo y gastaría una llamada a la API.
+Esto protege de que otro número que consiga el número del bot pueda leer
+horario, notas, **pagos pendientes**, grabaciones o anuncios, apagar las
+alertas (las preferencias son globales, no por número), o gastar la cuota
+de `ANTHROPIC_API_KEY` mandando preguntas libres.
+
+Las dos capas son deliberadamente redundantes: la firma valida que el
+mensaje viene de Meta, y la allowlist valida de quién es el mensaje. Ni
+una ni otra sola alcanza.
+
+**Endpoints administrativos** (`/test`, `/debug-horario`, `/subscribe-app`)
+van protegidos por `TEST_TOKEN`. Ten en cuenta que el token viaja como
+query param (`?token=...`), así que puede quedar en el historial del
+navegador o en logs intermedios — usa `curl` y rota el token si sospechas
+que se filtró.
+
+**Lo que no está cubierto:** no hay rate limiting propio. Un atacante que
+conociera la URL solo puede gastar invocaciones del Worker (los POST se
+cortan en el 403, antes de llegar a Claude o al campus), pero si alguna vez
+se filtra el `TEST_TOKEN`, `/test` puede disparar envíos reales de
+WhatsApp. Para eso, Cloudflare ofrece WAF Rate Limiting a nivel de zona.
 
 ## Fase B — Proyecto local
 
@@ -340,9 +388,15 @@ no tiene salida de red hacia Cloudflare/Meta/el campus).
    | `CAMPUS_USUARIO` | Usuario del campus virtual |
    | `CAMPUS_PASSWORD` | Contraseña del campus virtual |
    | `WEBHOOK_VERIFY_TOKEN` | Uno propio, aleatorio, para el handshake de verificación del webhook de Meta |
+   | `META_APP_SECRET` | **Clave secreta de la app** de Meta (App Dashboard → Configuración → Básica → "Mostrar"). Con esto se verifica la firma de cada webhook — sin él, el Worker rechaza todos los POST |
 
    No hace falta ningún secret para `cPerCodigo` — se resuelve dinámicamente
    en cada request (ver sección de endpoints).
+
+   > ⚠️ `META_APP_SECRET` debe existir **antes** del primer deploy que
+   > incluya la verificación de firma. El Worker falla cerrado: si el
+   > secret está vacío, todo POST a `/webhook` responde 403 y el chatbot
+   > deja de contestar (los crons siguen funcionando normal).
 
 2. Ve a la pestaña **Actions → Deploy Worker → Run workflow**, elige esta
    rama y ejecútalo. También se dispara solo en cada push a `main`.
@@ -368,6 +422,7 @@ npx wrangler secret put ANTHROPIC_API_KEY
 npx wrangler secret put CAMPUS_USUARIO
 npx wrangler secret put CAMPUS_PASSWORD
 npx wrangler secret put WEBHOOK_VERIFY_TOKEN
+npx wrangler secret put META_APP_SECRET
 
 npm run deploy
 ```
@@ -468,6 +523,10 @@ falta un fallback estático), pero no son parte del flujo activo.
 - **Recursos tipo "Archivo"** (PDF/PPT subidos al campus) no traen una URL
   absoluta confiable en la respuesta del endpoint — el bot solo avisa que
   están disponibles en el campus virtual, sin link directo.
+- **Bot de un solo usuario por diseño**: la allowlist compara contra un
+  único `DESTINATARIO` y las preferencias de alertas son globales. Soportar
+  varios usuarios requeriría preferencias por número y una lista de
+  números autorizados.
 - **Alternativa**: si el tema de plantillas de WhatsApp se complica,
   Telegram Bot API es más simple (sin ventana de 24h, sin plantillas, sin
   verificación de negocio) y reutiliza el mismo Worker con un solo `fetch`.
