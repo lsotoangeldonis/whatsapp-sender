@@ -162,6 +162,7 @@ máquina ni de la red de quien lo ejecute.
    | `CAMPUS_USUARIO` | Usuario del campus virtual |
    | `CAMPUS_PASSWORD` | Contraseña del campus virtual |
    | `WEBHOOK_VERIFY_TOKEN` | Uno propio, aleatorio, para el handshake de verificación del webhook de Meta |
+   | `CAMPUS_PER_CODIGO` | Tu código interno de alumno (`cPerCodigo`), necesario para el endpoint de grabaciones de Zoom — no lo devuelve ningún endpoint, viene embebido en el HTML del campus |
 
 2. Ve a la pestaña **Actions → Deploy Worker → Run workflow**, elige esta
    rama y ejecútalo. También se dispara solo en cada push a `main`.
