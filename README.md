@@ -4,6 +4,14 @@ Recordatorio diario de clases por WhatsApp, usando un Cloudflare Worker con
 Cron Triggers. Sin servidor propio, sin costo (mientras la WhatsApp Cloud API
 se use en modo prueba y el Worker se mantenga en el plan Free de Cloudflare).
 
+## Estado actual
+
+✅ **Desplegado y en producción** en
+`https://whatsapp-sender.lsotoangeldonis.workers.dev`. La plantilla
+`recordatorio_clases` fue aprobada por Meta el 22 de septiembre de 2026 y los
+Cron Triggers (07:00 y 21:00 hora Lima) ya están enviando mensajes reales sin
+intervención manual.
+
 ## Cómo funciona
 
 Dos Cron Triggers (hora Lima, UTC-5):
@@ -51,9 +59,11 @@ Se incluyen **todas** las sesiones (EN VIVO y Asesoría) del día correspondient
      de línea, tabs o más de 4 espacios seguidos. Ejemplo:
      `18:00–19:30 Análisis Integral en 3D (Asesoría) · 21:20–22:50 Programación Estructurada (Asesoría)`.
 
-   Las plantillas de utilidad suelen aprobarse en minutos u horas. El nombre
-   debe coincidir con `WHATSAPP_TEMPLATE_NAME` (por defecto
-   `recordatorio_clases`).
+   Las plantillas de utilidad suelen aprobarse en minutos u horas (en este
+   proyecto tardó cerca de 8 horas). El nombre debe coincidir con
+   `WHATSAPP_TEMPLATE_NAME` (por defecto `recordatorio_clases`) — ya está
+   **aprobada y activa**, este paso solo hace falta si la recreas o agregas
+   una plantilla nueva (ej. para otro periodo académico).
 5. En **Business Suite → Configuración → Usuarios → Usuarios del sistema**,
    crea un usuario del sistema, asígnale la app de WhatsApp con permisos
    `whatsapp_business_messaging` y `whatsapp_business_management`, y genera un
@@ -122,7 +132,29 @@ npx wrangler secret put WHATSAPP_TEMPLATE_LANG   # opcional, default: es
 npm run deploy
 ```
 
+## Workflows de GitHub Actions
+
+| Workflow | Trigger | Qué hace |
+|---|---|---|
+| `deploy.yml` | Push a `main`, o manual | Despliega el Worker con `wrangler deploy`. |
+| `setup-kv.yml` | Manual | Crea el namespace `HORARIO_KV` en Cloudflare. Ya se corrió una vez; solo hace falta de nuevo si se borra el namespace. |
+| `seed-kv.yml` | Manual | Sube el contenido del secret `HORARIO_JSON` a KV. Correr cada vez que cambie el horario (ej. nuevo periodo académico). |
+| `check-template.yml` | **Solo manual** | Prueba el endpoint `/test` real contra la fecha `2026-09-22`, con la plantilla configurada por defecto. Acepta un input opcional `extra` para overrides (ej. `plantilla=hello_world&idioma=en_US`). |
+
+> ⚠️ **`check-template.yml` nunca debe llevar un trigger `schedule`.**
+> Este workflow llama al endpoint `/test` **real** — si la plantilla ya está
+> aprobada, cada corrida envía un WhatsApp de verdad. Se usó temporalmente
+> con un cron cada 20 minutos para monitorear la aprobación de la plantilla,
+> y una vez aprobada empezó a duplicar el mensaje de producción cada 20
+> minutos hasta que se detectó y se quitó el `schedule`. Úsalo solo con
+> `workflow_dispatch` manual, puntual.
+
 ## Pruebas
+
+> ⚠️ Con la plantilla ya aprobada, el endpoint `/test` **envía un WhatsApp
+> real** cada vez que encuentra sesiones para la fecha consultada (no es un
+> simulacro). Los ejemplos de fechas sin clases (`sin_clases`) siguen siendo
+> inofensivos porque no llegan a llamar a la API de Meta.
 
 1. **Meta funciona** — plantilla `hello_world` desde API Setup (Fase A.3).
 2. **Credenciales desde la terminal**:
@@ -142,7 +174,10 @@ npm run deploy
    ```
 
    Esto expone `/__scheduled` para disparar el cron a demanda sin esperar la
-   hora real.
+   hora real. Nota: `wrangler dev` usa por defecto un KV **local** vacío (no
+   el namespace remoto), así que sin sembrarlo aparte va a devolver
+   `sin_clases` para cualquier fecha. Para probar contra los datos reales
+   localmente, agrega `--remote` a `npm run dev` / `npm run dev:cron`.
 
 4. **Lógica de fechas** (usa el endpoint manual una vez desplegado, o
    `wrangler dev`):
