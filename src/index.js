@@ -1,4 +1,5 @@
 import { enviarMenu, manejarOpcionMenu, responderPreguntaLibre } from './chatbot.js';
+import { loginCampus, getHorarioDetallado } from './campus.js';
 
 const MESES = [
   'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
@@ -164,6 +165,17 @@ export default {
       }
 
       return new Response('Method not allowed', { status: 405 });
+    }
+
+    if (url.pathname === '/debug-horario') {
+      if (!env.TEST_TOKEN || url.searchParams.get('token') !== env.TEST_TOKEN) {
+        return new Response('Unauthorized', { status: 401 });
+      }
+      const cookie = await loginCampus(env);
+      const sesiones = await getHorarioDetallado(cookie);
+      return new Response(JSON.stringify(sesiones.slice(0, 3), null, 2), {
+        headers: { 'Content-Type': 'application/json' },
+      });
     }
 
     if (url.pathname === '/subscribe-app') {
