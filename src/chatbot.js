@@ -10,6 +10,7 @@ import {
   getGrabaciones,
   getMuro,
 } from './campus.js';
+import { obtenerPreferenciasAlertas, guardarPreferenciasAlertas } from './preferencias.js';
 
 const GRAPH_BASE = 'https://graph.facebook.com/v25.0';
 
@@ -57,7 +58,44 @@ export async function enviarMenu(env, para) {
           },
           {
             title: 'Otro',
-            rows: [{ id: 'menu_libre', title: 'Otra pregunta' }],
+            rows: [
+              { id: 'menu_libre', title: 'Otra pregunta' },
+              { id: 'menu_config_alertas', title: '⚙️ Configurar alertas' },
+            ],
+          },
+        ],
+      },
+    },
+  });
+}
+
+// --- Configuración de alertas (activar/desactivar), sin pasar por Claude. ---
+
+const ETIQUETAS_TOGGLE = {
+  resumenHoy: 'Resumen 07:00',
+  avisoManana: 'Aviso 21:00',
+  proximaClase: 'Próxima clase',
+  proximoPago: 'Próximo pago',
+};
+
+async function enviarMenuAlertas(env, para) {
+  const prefs = await obtenerPreferenciasAlertas(env);
+  await enviarWhatsApp(env, {
+    to: para,
+    type: 'interactive',
+    interactive: {
+      type: 'list',
+      header: { type: 'text', text: 'Alertas' },
+      body: { text: 'Toca una alerta para activarla o desactivarla.' },
+      action: {
+        button: 'Ver alertas',
+        sections: [
+          {
+            title: 'Configuración',
+            rows: Object.entries(ETIQUETAS_TOGGLE).map(([campo, etiqueta]) => ({
+              id: `toggle_${campo}`,
+              title: `${etiqueta} ${prefs[campo] ? '✅' : '🔕'}`,
+            })),
           },
         ],
       },
@@ -243,6 +281,34 @@ const HANDLERS_MENU = {
 export async function manejarOpcionMenu(env, para, idOpcion) {
   if (idOpcion === 'menu_libre') {
     await enviarTexto(env, para, 'Escríbeme tu pregunta y te respondo 🙂');
+    return;
+  }
+
+  if (idOpcion === 'menu_config_alertas') {
+    try {
+      await enviarMenuAlertas(env, para);
+    } catch (error) {
+      console.error('Error mostrando configuración de alertas', error);
+      await enviarTexto(env, para, '⚠️ No pude cargar tu configuración de alertas ahora mismo.');
+    }
+    return;
+  }
+
+  if (idOpcion.startsWith('toggle_')) {
+    const campo = idOpcion.slice('toggle_'.length);
+    if (!ETIQUETAS_TOGGLE[campo]) {
+      await enviarTexto(env, para, 'No reconocí esa alerta.');
+      return;
+    }
+    try {
+      const prefs = await obtenerPreferenciasAlertas(env);
+      prefs[campo] = !prefs[campo];
+      await guardarPreferenciasAlertas(env, prefs);
+      await enviarMenuAlertas(env, para);
+    } catch (error) {
+      console.error('Error actualizando preferencias de alertas', error);
+      await enviarTexto(env, para, '⚠️ No pude actualizar esa alerta ahora mismo.');
+    }
     return;
   }
 

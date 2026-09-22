@@ -1,5 +1,6 @@
-import { enviarMenu, manejarOpcionMenu, responderPreguntaLibre } from './chatbot.js';
-import { loginCampus, getHorarioDetallado } from './campus.js';
+import { enviarMenu, manejarOpcionMenu, responderPreguntaLibre, enviarTexto } from './chatbot.js';
+import { loginCampus, getHorarioDetallado, getPagosPendientes } from './campus.js';
+import { obtenerPreferenciasAlertas } from './preferencias.js';
 
 const MESES = [
   'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
@@ -139,9 +140,74 @@ async function enviarRecordatorio(env, fechaISO, prefijo, opciones = {}) {
   return { enviado: true, datos, fecha: fechaISO };
 }
 
-// Los dos cron triggers configurados en wrangler.toml
+// Los tres cron triggers configurados en wrangler.toml
 const CRON_RESUMEN_HOY = '0 12 * * *'; // 07:00 Lima
 const CRON_AVISO_MANANA = '0 2 * * *'; // 21:00 Lima (día siguiente en UTC)
+const CRON_ALERTA_CLASE = '*/15 * * * *'; // cada 15 min, para avisar clases por empezar
+
+// Avisa ~15 minutos antes de que empiece una sesión del día. Corre cada 15
+// min, así que la ventana de detección (8 a 22 min de anticipación) cubre
+// el intervalo entre corridas sin duplicar avisos gracias al dedupe en KV.
+async function verificarAlertaClase(env) {
+  const prefs = await obtenerPreferenciasAlertas(env);
+  if (!prefs.proximaClase) return;
+
+  let horario;
+  try {
+    horario = await obtenerHorario(env);
+  } catch (error) {
+    console.error('Error obteniendo el horario para la alerta de clase', error);
+    return;
+  }
+
+  const fechaISO = fechaISOLima();
+  const sesiones = sesionesDelDia(horario, fechaISO);
+  const ahora = new Date(Date.now() - LIMA_OFFSET_MS);
+  const minutosAhora = ahora.getUTCHours() * 60 + ahora.getUTCMinutes();
+
+  for (const s of sesiones) {
+    const [h, m] = s.inicio.split(':').map(Number);
+    const minutosInicio = h * 60 + m;
+    const diff = minutosInicio - minutosAhora;
+    if (diff < 8 || diff > 22) continue;
+
+    const claveDedupe = `alerta_clase:${fechaISO}:${s.inicio}:${s.curso}`;
+    if (await env.HORARIO_KV.get(claveDedupe)) continue;
+
+    await enviarTexto(env, env.DESTINATARIO, `⏰ Tu clase de *${s.curso}* (${s.tipo}) empieza en ~15 minutos, a las ${s.inicio}.`);
+    await env.HORARIO_KV.put(claveDedupe, '1', { expirationTtl: 60 * 60 * 24 });
+  }
+}
+
+// Avisa cuando una cuota pendiente vence en 3 días o menos. Corre una vez
+// al día, junto con el resumen de las 07:00.
+async function verificarAlertaPago(env) {
+  const prefs = await obtenerPreferenciasAlertas(env);
+  if (!prefs.proximoPago) return;
+
+  let cookie;
+  try {
+    cookie = await loginCampus(env);
+  } catch (error) {
+    console.error('Error de login para la alerta de pago', error);
+    return;
+  }
+
+  const pagos = await getPagosPendientes(cookie);
+  const hoyISO = fechaISOLima();
+  const [anioHoy, mesHoy, diaHoy] = hoyISO.split('-').map(Number);
+  const hoyUTC = Date.UTC(anioHoy, mesHoy - 1, diaHoy);
+
+  for (const p of pagos) {
+    const [dia, mes, anio] = p.FecVenc.split('/').map(Number);
+    const venceUTC = Date.UTC(anio, mes - 1, dia);
+    const diffDias = Math.round((venceUTC - hoyUTC) / 86400000);
+    if (diffDias < 0 || diffDias > 3) continue;
+
+    const cuando = diffDias === 0 ? 'hoy' : diffDias === 1 ? 'mañana' : `en ${diffDias} días`;
+    await enviarTexto(env, env.DESTINATARIO, `💰 Recordatorio: la cuota ${p.NroCuota} (S/ ${p.TotalText}) vence ${cuando} (${p.FecVenc}).`);
+  }
+}
 
 // Palabras que muestran el menú interactivo en vez de ir directo a Claude
 const PALABRAS_MENU = new Set(['menu', 'menú', 'hola', 'inicio', 'ayuda']);
@@ -167,9 +233,22 @@ async function manejarMensajeEntrante(env, mensaje) {
 export default {
   async scheduled(event, env, ctx) {
     if (event.cron === CRON_RESUMEN_HOY) {
-      ctx.waitUntil(enviarRecordatorio(env, fechaISOLima(), 'Hoy'));
+      ctx.waitUntil(
+        (async () => {
+          const prefs = await obtenerPreferenciasAlertas(env);
+          if (prefs.resumenHoy) await enviarRecordatorio(env, fechaISOLima(), 'Hoy');
+          await verificarAlertaPago(env);
+        })()
+      );
     } else if (event.cron === CRON_AVISO_MANANA) {
-      ctx.waitUntil(enviarRecordatorio(env, fechaISOLima(24 * 60 * 60 * 1000), 'Mañana'));
+      ctx.waitUntil(
+        (async () => {
+          const prefs = await obtenerPreferenciasAlertas(env);
+          if (prefs.avisoManana) await enviarRecordatorio(env, fechaISOLima(24 * 60 * 60 * 1000), 'Mañana');
+        })()
+      );
+    } else if (event.cron === CRON_ALERTA_CLASE) {
+      ctx.waitUntil(verificarAlertaClase(env));
     }
   },
 
