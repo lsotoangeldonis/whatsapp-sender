@@ -13,8 +13,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Probar envio real
+        # Los valores van por env y no interpolados con ${{ }} dentro del
+        # script: interpolarlos deja que el input "extra" inyecte comandos.
+        env:
+          TEST_TOKEN: ${{ secrets.TEST_TOKEN }}
+          EXTRA: ${{ github.event.inputs.extra }}
         run: |
-          RESPUESTA=$(curl -s "https://whatsapp-sender.lsotoangeldonis.workers.dev/test?token=${{ secrets.TEST_TOKEN }}&fecha=2026-09-22&${{ github.event.inputs.extra }}")
+          RESPUESTA=$(curl -s -H "Authorization: Bearer $TEST_TOKEN" \
+            "https://whatsapp-sender.lsotoangeldonis.workers.dev/test?fecha=2026-09-22&$EXTRA")
           echo "$RESPUESTA"
           if echo "$RESPUESTA" | jq -e '.enviado == true' > /dev/null 2>&1; then
             echo "### ✅ Plantilla aprobada — mensaje real enviado" >> "$GITHUB_STEP_SUMMARY"

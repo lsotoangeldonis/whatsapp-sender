@@ -210,6 +210,24 @@ function hexABytes(hex) {
   return bytes;
 }
 
+function cadenasIguales(a, b) {
+  if (a.length !== b.length) return false;
+  let diferencia = 0;
+  for (let i = 0; i < a.length; i++) diferencia |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diferencia === 0;
+}
+
+// El TEST_TOKEN va en la cabecera Authorization, no en la query string: con
+// observability activado, Cloudflare guarda la URL completa de cada
+// invocación, así que un ?token=... quedaría persistido en los logs (y en
+// el historial del navegador).
+function autorizado(request, env) {
+  if (!env.TEST_TOKEN) return false;
+  const cabecera = request.headers.get('authorization') || '';
+  if (!cabecera.startsWith('Bearer ')) return false;
+  return cadenasIguales(cabecera.slice('Bearer '.length), env.TEST_TOKEN);
+}
+
 async function manejarMensajeEntrante(env, mensaje) {
   const para = mensaje.from;
 
@@ -294,7 +312,7 @@ export default {
     }
 
     if (url.pathname === '/debug-horario') {
-      if (!env.TEST_TOKEN || url.searchParams.get('token') !== env.TEST_TOKEN) {
+      if (!autorizado(request, env)) {
         return new Response('Unauthorized', { status: 401 });
       }
       const cookie = await loginCampus(env);
@@ -309,13 +327,18 @@ export default {
     }
 
     if (url.pathname === '/subscribe-app') {
-      if (!env.TEST_TOKEN || url.searchParams.get('token') !== env.TEST_TOKEN) {
+      if (!autorizado(request, env)) {
         return new Response('Unauthorized', { status: 401 });
       }
       // Suscribe explícitamente la WABA a esta app: sin esto, el webhook a
       // nivel de app puede estar bien configurado y aun así no recibir
       // mensajes reales. Va contra el WABA ID, no el phone_number_id.
       const wabaId = url.searchParams.get('waba_id') || env.PHONE_NUMBER_ID;
+      // Sin validar, un waba_id con ../ redirige este POST a otra ruta de
+      // graph.facebook.com llevándose el WHATSAPP_TOKEN en la cabecera.
+      if (!/^\d+$/.test(wabaId)) {
+        return new Response('waba_id inválido: debe ser numérico', { status: 400 });
+      }
       const respuesta = await fetch(`https://graph.facebook.com/v25.0/${wabaId}/subscribed_apps`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${env.WHATSAPP_TOKEN}` },
@@ -330,7 +353,7 @@ export default {
     if (url.pathname !== '/test') {
       return new Response('Not found', { status: 404 });
     }
-    if (!env.TEST_TOKEN || url.searchParams.get('token') !== env.TEST_TOKEN) {
+    if (!autorizado(request, env)) {
       return new Response('Unauthorized', { status: 401 });
     }
 
@@ -342,7 +365,7 @@ export default {
 
     // Override temporal para probar con una plantilla ya activa (ej.
     // hello_world) mientras la propia sigue en revisión en Meta:
-    // /test?token=...&plantilla=hello_world&idioma=en_US
+    // /test?plantilla=hello_world&idioma=en_US
     const plantillaOverride = url.searchParams.get('plantilla');
     const opciones = plantillaOverride
       ? { plantilla: plantillaOverride, idioma: url.searchParams.get('idioma') || 'en_US', sinParametros: true }

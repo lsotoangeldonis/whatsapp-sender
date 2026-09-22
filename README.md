@@ -296,8 +296,9 @@ en paralelo con `getCurriculaAlumno`, cada vez que se llama
 
    El Worker expone un atajo protegido por `TEST_TOKEN` para esto:
 
-   ```
-   GET /subscribe-app?token=<TEST_TOKEN>&waba_id=<WABA_ID>
+   ```bash
+   curl -H "Authorization: Bearer <TEST_TOKEN>" \
+     "https://<tu-worker>.workers.dev/subscribe-app?waba_id=<WABA_ID>"
    ```
 
    El `WABA_ID` (WhatsApp Business Account ID) se ve en la pantalla
@@ -341,17 +342,34 @@ Las dos capas son deliberadamente redundantes: la firma valida que el
 mensaje viene de Meta, y la allowlist valida de quién es el mensaje. Ni
 una ni otra sola alcanza.
 
-**Endpoints administrativos** (`/test`, `/debug-horario`, `/subscribe-app`)
-van protegidos por `TEST_TOKEN`. Ten en cuenta que el token viaja como
-query param (`?token=...`), así que puede quedar en el historial del
-navegador o en logs intermedios — usa `curl` y rota el token si sospechas
-que se filtró.
+**3. Endpoints administrativos.** `/test`, `/debug-horario` y
+`/subscribe-app` exigen el `TEST_TOKEN` en la cabecera
+`Authorization: Bearer <token>`, **no** en la query string: con
+`observability` activado, Cloudflare guarda la URL completa de cada
+invocación, así que un `?token=...` quedaría persistido en los logs (y en
+el historial del navegador). La comparación es en tiempo constante.
 
-**Lo que no está cubierto:** no hay rate limiting propio. Un atacante que
-conociera la URL solo puede gastar invocaciones del Worker (los POST se
-cortan en el 403, antes de llegar a Claude o al campus), pero si alguna vez
-se filtra el `TEST_TOKEN`, `/test` puede disparar envíos reales de
-WhatsApp. Para eso, Cloudflare ofrece WAF Rate Limiting a nivel de zona.
+**4. Validación de `waba_id`.** `/subscribe-app` interpola ese parámetro en
+una URL de `graph.facebook.com` en una petición que lleva tu
+`WHATSAPP_TOKEN`. Sin validarlo, un valor con `../` redirige el POST a otra
+ruta de la Graph API llevándose el token, así que se exige que sea
+numérico.
+
+**5. Datos del campus como datos, no instrucciones.** Lo que devuelven las
+herramientas (sobre todo los anuncios del muro, que los publican terceros)
+entra al contexto de Claude como `tool_result`. El `SYSTEM_PROMPT` le
+indica explícitamente que ese contenido es data y que nunca debe seguir
+instrucciones incrustadas ahí, ni avalar enlaces que vengan de un anuncio.
+
+**Lo que no está cubierto — rate limiting.** No hay límite de tasa propio y
+**es deliberado**: después de los puntos 1–4, todo request no autenticado
+muere en el 401/403 antes de tocar Claude, el campus o la Graph API, así
+que lo único que puede gastar es invocaciones del Worker. Implementar
+contadores en KV costaría una escritura por request contra un límite de
+1000 escrituras/día en el plan Free — el "arreglo" se quedaría sin cuota
+mucho antes que lo que pretende proteger. Si algún día hace falta, el lugar
+correcto es Cloudflare WAF Rate Limiting (a nivel de zona, no en el
+Worker).
 
 ## Fase B — Proyecto local
 
@@ -482,17 +500,19 @@ falta un fallback estático), pero no son parte del flujo activo.
    Esto expone `/__scheduled` para disparar el cron a demanda sin esperar la
    hora real.
 
-4. **Recordatorio manual** (usa `curl`, no el navegador — ver nota arriba):
+4. **Recordatorio manual.** El token va en la cabecera, no en la URL:
 
    ```bash
-   curl "https://<tu-worker>.workers.dev/test?token=<TEST_TOKEN>&fecha=2026-09-22"
+   curl -H "Authorization: Bearer <TEST_TOKEN>" \
+     "https://<tu-worker>.workers.dev/test?fecha=2026-09-22"
    # → sesiones de esa fecha en vivo desde el campus (enviado: true) o sin_clases
    ```
 
 5. **Horario crudo** (diagnóstico, sin enviar nada):
 
    ```bash
-   curl "https://<tu-worker>.workers.dev/debug-horario?token=<TEST_TOKEN>&curso=Programación"
+   curl -H "Authorization: Bearer <TEST_TOKEN>" \
+     "https://<tu-worker>.workers.dev/debug-horario?curso=Programación"
    # → JSON con las sesiones de HORARIO_DETALLADO que matchean el filtro
    ```
 
