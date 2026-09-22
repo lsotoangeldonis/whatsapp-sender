@@ -166,6 +166,24 @@ export default {
       return new Response('Method not allowed', { status: 405 });
     }
 
+    if (url.pathname === '/subscribe-app') {
+      if (!env.TEST_TOKEN || url.searchParams.get('token') !== env.TEST_TOKEN) {
+        return new Response('Unauthorized', { status: 401 });
+      }
+      // Suscribe explícitamente el número de teléfono a esta app: sin esto,
+      // el webhook a nivel de app puede estar bien configurado y aun así no
+      // recibir mensajes reales de este número.
+      const respuesta = await fetch(`https://graph.facebook.com/v25.0/${env.PHONE_NUMBER_ID}/subscribed_apps`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${env.WHATSAPP_TOKEN}` },
+      });
+      const datos = await respuesta.json();
+      return new Response(JSON.stringify(datos, null, 2), {
+        headers: { 'Content-Type': 'application/json' },
+        status: respuesta.status,
+      });
+    }
+
     if (url.pathname !== '/test') {
       return new Response('Not found', { status: 404 });
     }
