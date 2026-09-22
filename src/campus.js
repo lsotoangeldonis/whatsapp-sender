@@ -162,6 +162,18 @@ export async function getGrabaciones(cookie) {
     .filter((s) => s.grabaciones.length > 0);
 }
 
+// Tablero de anuncios/eventos de la universidad (mismo feed que se ve en
+// el Panel principal del campus).
+export async function getMuro(cookie) {
+  const datos = await llamarMetodo(cookie, '/CampusVirtual/ua/Def_Estudiante.aspx/getInfoAlumno', { endpoint: 'muro_web' });
+  return datos.map((p) => ({
+    titulo: p.pTitulo,
+    fecha: p.fechaPublicacion,
+    contenido: quitarHtml(p.pContenido || ''),
+    imagen: p.pPathImagen ? `${BASE}${p.pPathImagen}` : null,
+  }));
+}
+
 export async function getHorarioDetallado(cookie) {
   const datos = await llamarMetodo(
     cookie,

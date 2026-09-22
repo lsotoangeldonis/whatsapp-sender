@@ -8,6 +8,7 @@ import {
   getAvanceCarrera,
   getDetalleSesionesCurso,
   getGrabaciones,
+  getMuro,
 } from './campus.js';
 
 const GRAPH_BASE = 'https://graph.facebook.com/v25.0';
@@ -51,6 +52,7 @@ export async function enviarMenu(env, para) {
               { id: 'menu_notas', title: 'Mis notas / avance' },
               { id: 'menu_pagos', title: 'Pagos pendientes' },
               { id: 'menu_grabaciones', title: 'Grabaciones recientes' },
+              { id: 'menu_anuncios', title: 'Anuncios y eventos' },
             ],
           },
           {
@@ -220,6 +222,14 @@ async function manejarGrabaciones(cookie) {
   return `🎥 Últimas grabaciones:\n\n${lineas.join('\n\n')}`;
 }
 
+async function manejarAnuncios(cookie) {
+  const posts = await getMuro(cookie);
+  const recientes = posts.slice(0, 5);
+  if (recientes.length === 0) return 'No hay anuncios recientes.';
+  const lineas = recientes.map((p) => `📌 *${p.titulo}* — ${p.fecha}${p.contenido ? `\n${p.contenido}` : ''}`);
+  return `📢 Anuncios y eventos:\n\n${lineas.join('\n\n')}`;
+}
+
 const HANDLERS_MENU = {
   menu_horario_hoy: manejarHorarioHoy,
   menu_proxima_clase: manejarProximaClase,
@@ -227,6 +237,7 @@ const HANDLERS_MENU = {
   menu_notas: manejarNotas,
   menu_pagos: manejarPagos,
   menu_grabaciones: manejarGrabaciones,
+  menu_anuncios: manejarAnuncios,
 };
 
 export async function manejarOpcionMenu(env, para, idOpcion) {
@@ -336,6 +347,11 @@ const HERRAMIENTAS = [
       },
     },
   },
+  {
+    name: 'get_anuncios',
+    description: 'Devuelve los anuncios y eventos recientes publicados por la universidad en el tablero del campus.',
+    input_schema: { type: 'object', properties: {} },
+  },
 ];
 
 async function ejecutarHerramienta(cookie, nombre, input) {
@@ -364,6 +380,8 @@ async function ejecutarHerramienta(cookie, nombre, input) {
       if (!input?.curso) return sesiones;
       return sesiones.filter((s) => s.asignatura.toUpperCase().includes(input.curso.toUpperCase()));
     }
+    case 'get_anuncios':
+      return getMuro(cookie);
     default:
       throw new Error(`Herramienta desconocida: ${nombre}`);
   }
