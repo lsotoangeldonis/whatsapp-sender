@@ -1,8 +1,6 @@
 name: Check Template Status
 
 on:
-  schedule:
-    - cron: '*/20 * * * *'
   workflow_dispatch:
     inputs:
       extra:
