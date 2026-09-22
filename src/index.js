@@ -173,7 +173,11 @@ export default {
       }
       const cookie = await loginCampus(env);
       const sesiones = await getHorarioDetallado(cookie);
-      return new Response(JSON.stringify(sesiones.slice(0, 3), null, 2), {
+      const filtro = url.searchParams.get('curso');
+      const filtradas = filtro
+        ? sesiones.filter((s) => (s.cAsignatura || '').toUpperCase().includes(filtro.toUpperCase()))
+        : sesiones.slice(0, 3);
+      return new Response(JSON.stringify(filtradas, null, 2), {
         headers: { 'Content-Type': 'application/json' },
       });
     }
