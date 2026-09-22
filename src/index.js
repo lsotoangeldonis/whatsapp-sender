@@ -1,5 +1,12 @@
 import { enviarMenu, manejarOpcionMenu, responderPreguntaLibre, enviarTexto } from './chatbot.js';
-import { conSesion, getHorarioDetallado, getPagosPendientes } from './campus.js';
+import {
+  conSesion,
+  getHorarioDetallado,
+  getPagosPendientes,
+  getCursosActuales,
+  getDetalleSesionesCurso,
+  getGrabaciones,
+} from './campus.js';
 import { obtenerPreferenciasAlertas } from './preferencias.js';
 import { fechaISOLima, fechaLegible, fechaISODesdeCampus, tipoSesion, LIMA_OFFSET_MS } from './fechas.js';
 
@@ -66,12 +73,17 @@ async function enviarRecordatorio(env, fechaISO, prefijo, opciones = {}) {
   }
 
   const sesiones = sesionesDelDia(horario, fechaISO);
-  if (sesiones.length === 0) {
+  // El mensaje de la mañana avisa igual cuando el día está libre; el de la
+  // noche se calla, para no mandar un "no hay nada" cada domingo.
+  if (sesiones.length === 0 && !opciones.enviarSiVacio) {
     return { enviado: false, motivo: 'sin_clases', fecha: fechaISO };
   }
 
   const encabezado = fechaLegible(fechaISO, prefijo);
-  const cuerpo = formatearSesiones(sesiones) + (hayEnVivo(sesiones) ? '' : ' · ⚠️ Ninguna es EN VIVO.');
+  const cuerpo =
+    sesiones.length === 0
+      ? 'No tienes clases programadas para hoy.'
+      : formatearSesiones(sesiones) + (hayEnVivo(sesiones) ? '' : ' · ⚠️ Ninguna es EN VIVO.');
 
   const template = {
     name: opciones.plantilla || env.WHATSAPP_TEMPLATE_NAME || 'recordatorio_clases',
@@ -128,6 +140,92 @@ async function enviarRecordatorio(env, fechaISO, prefijo, opciones = {}) {
   }
 
   return { enviado: true, datos, fecha: fechaISO };
+}
+
+// --- Resumen de las clases de ayer ---
+// Va en el mensaje de la mañana y no al terminar la clase: la grabación de
+// Zoom tarda en publicarse, así que un aviso inmediato casi nunca la
+// tendría. Sale como texto libre (no plantilla) porque necesita saltos de
+// línea y enlaces, así que depende de la ventana de 24 h de WhatsApp.
+
+// "DD/MM/YYYY" o "DD/MM/YYYY HH:MM" -> "YYYY-MM-DD"
+function fechaISODeCampusConHora(valor) {
+  return fechaISODesdeCampus(String(valor).split(' ')[0]);
+}
+
+// La sesión cuyo rango semanal contiene la fecha. Se prefiere el rango
+// sobre la marca "activa" porque al cruzar de semana (ej. lunes mirando el
+// domingo) la activa ya rotó a la sesión siguiente.
+function sesionDeLaFecha(sesiones, fechaISO) {
+  const porRango = sesiones.find((s) => {
+    if (!s.semanaInicio || !s.semanaFin) return false;
+    return fechaISO >= fechaISODesdeCampus(s.semanaInicio) && fechaISO <= fechaISODesdeCampus(s.semanaFin);
+  });
+  return porRango || sesiones.find((s) => s.activa) || null;
+}
+
+function bloqueResumenCurso(curso, detalle, grabaciones, fechaISO) {
+  const partes = [`*${curso.asignatura}*`];
+
+  const sesion = detalle && sesionDeLaFecha(detalle.sesiones, fechaISO);
+  if (sesion) {
+    partes.push(`Sesión ${sesion.sesion}: ${sesion.tema}`);
+    const recursos = detalle.recursos
+      .filter((r) => String(r.sesion) === String(sesion.sesion) && r.url)
+      .map((r) => `📎 ${r.titulo}: ${r.url}`);
+    if (recursos.length > 0) partes.push(recursos.join('\n'));
+  }
+
+  const grabacion = grabaciones.find(
+    (g) =>
+      g.asignatura.toUpperCase() === curso.asignatura.toUpperCase() &&
+      fechaISODeCampusConHora(g.fecha) === fechaISO
+  );
+  partes.push(grabacion ? `🎥 ${grabacion.grabaciones[0]}` : '🎥 Grabación aún no publicada.');
+
+  return partes.join('\n');
+}
+
+async function resumenClasesDeAyer(env, horario) {
+  const ayerISO = fechaISOLima(-24 * 60 * 60 * 1000);
+  const sesionesAyer = sesionesDelDia(horario, ayerISO);
+  if (sesionesAyer.length === 0) return null;
+
+  const nombresAyer = new Set(sesionesAyer.map((s) => s.curso.toUpperCase()));
+
+  const bloques = await conSesion(env, async (cookie) => {
+    const [cursos, grabaciones] = await Promise.all([
+      getCursosActuales(cookie),
+      // Sin grabaciones el resumen sigue sirviendo: no vale tumbarlo por esto.
+      getGrabaciones(cookie).catch(() => []),
+    ]);
+    const cursosDeAyer = cursos.filter((c) => nombresAyer.has(c.asignatura.toUpperCase()));
+    const detalles = await Promise.all(
+      cursosDeAyer.map((c) => getDetalleSesionesCurso(cookie, c.nGruCodigo).catch(() => null))
+    );
+    return cursosDeAyer.map((c, i) => bloqueResumenCurso(c, detalles[i], grabaciones, ayerISO));
+  });
+
+  if (bloques.length === 0) return null;
+
+  const texto = `📚 *Resumen de ayer* (${fechaLegible(ayerISO, '').trim()})\n\n${bloques.join('\n\n')}`;
+  // WhatsApp corta el mensaje en 4096 caracteres y lo rechaza entero, así
+  // que con varios cursos y recursos conviene recortar antes que perderlo.
+  return texto.length > 3800 ? `${texto.slice(0, 3750)}\n…(recortado)` : texto;
+}
+
+async function enviarResumenDeAyer(env) {
+  try {
+    // El recordatorio ya refrescó el caché justo antes, así que esto no
+    // vuelve a consultar el horario al campus.
+    const horario = await obtenerHorarioCacheado(env);
+    const texto = await resumenClasesDeAyer(env, horario);
+    if (texto) await enviarTexto(env, env.DESTINATARIO, texto);
+    return texto;
+  } catch (error) {
+    console.error('Error armando el resumen de ayer', error);
+    return null;
+  }
 }
 
 // Los tres cron triggers configurados en wrangler.toml
@@ -280,7 +378,10 @@ export default {
       ctx.waitUntil(
         (async () => {
           const prefs = await obtenerPreferenciasAlertas(env);
-          if (prefs.resumenHoy) await enviarRecordatorio(env, fechaISOLima(), 'Hoy');
+          if (prefs.resumenHoy) {
+            await enviarRecordatorio(env, fechaISOLima(), 'Hoy', { enviarSiVacio: true });
+            await enviarResumenDeAyer(env);
+          }
           await verificarAlertaPago(env);
         })()
       );
@@ -373,6 +474,15 @@ export default {
     }
     if (!autorizado(request, env)) {
       return new Response('Unauthorized', { status: 401 });
+    }
+
+    // /test?resumen=ayer prueba el resumen matutino sin esperar al cron.
+    // Devuelve el texto armado aunque el envío falle por la ventana de 24 h.
+    if (url.searchParams.get('resumen') === 'ayer') {
+      const texto = await enviarResumenDeAyer(env);
+      return new Response(JSON.stringify({ huboClasesAyer: Boolean(texto), texto }, null, 2), {
+        headers: { 'Content-Type': 'application/json' },
+      });
     }
 
     const fechaParam = url.searchParams.get('fecha');

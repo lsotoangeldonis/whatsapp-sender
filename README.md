@@ -48,7 +48,7 @@ Configurados en `wrangler.toml` (`[triggers] crons`), todos evaluados en
 
 | Cron (UTC) | Hora Lima | Qué hace | Toggle que lo controla |
 |---|---|---|---|
-| `0 12 * * *` | 07:00 | Resumen de las clases de **hoy** (mensaje de plantilla) + revisa pagos por vencer (≤3 días) | `resumenHoy` / `proximoPago` |
+| `0 12 * * *` | 07:00 | Resumen de las clases de **hoy** (plantilla) + **resumen de las clases de ayer** (texto libre) + revisa pagos por vencer (≤3 días) | `resumenHoy` / `proximoPago` |
 | `0 2 * * *` | 21:00 (día previo) | Aviso de las clases de **mañana** (mensaje de plantilla) | `avisoManana` |
 | `*/15 * * * *` | cada 15 min | Alerta de texto libre cuando una sesión de hoy empieza en 8–22 min | `proximaClase` |
 
@@ -72,6 +72,47 @@ nada para esa alerta.
 - **Alerta de pago**: corre una vez al día (enganchada al cron de 07:00),
   compara `FecVenc` de cada cuota pendiente contra hoy, avisa si vence en
   0–3 días.
+
+### El mensaje de la mañana
+
+El cron de las 07:00 manda dos cosas:
+
+**1. El horario de hoy** (mensaje de plantilla). Si el día está libre, el
+cuerpo dice *"No tienes clases programadas para hoy."* en vez de callarse —
+a diferencia del aviso de las 21:00, que sí se salta los días vacíos para
+no mandar un "no hay nada" cada domingo.
+
+**2. El resumen de las clases de ayer** (texto libre): por cada curso que
+tuvo sesión ayer, el tema de esa sesión, los recursos con enlace, y la
+grabación de Zoom si ya está publicada (o *"Grabación aún no publicada"*).
+
+Va en la mañana, y no al terminar la clase, **a propósito**: la grabación
+de Zoom tarda en procesarse y publicarse, así que un aviso inmediato casi
+nunca la tendría. Al día siguiente ya suele estar.
+
+Dos detalles de implementación que importan:
+
+- **La sesión se elige por rango de fechas, no por la marca `activa`.** Al
+  cruzar de semana (un lunes mirando el domingo anterior) la sesión activa
+  ya rotó a la siguiente, y el resumen mostraría el tema equivocado.
+  `sesionDeLaFecha()` busca la sesión cuyo `semanaInicio`–`semanaFin`
+  contiene la fecha, y solo cae a `activa` si el campus no trae rangos.
+- **Es texto libre, así que depende de la ventana de 24 h de WhatsApp.** Si
+  no le escribiste al bot en las últimas 24 horas, este mensaje no se
+  entrega (el del horario sí, porque es plantilla). No se pierde nada
+  permanente: el mismo contenido está siempre en el menú, en
+  Ver un curso → sesión. Para que llegue garantizado habría que crear una
+  plantilla nueva en Meta con más variables, con la limitación de que cada
+  parámetro debe ir en una sola línea.
+
+Para probarlo sin esperar al cron:
+
+```bash
+curl -H "Authorization: Bearer <TEST_TOKEN>" \
+  "https://<tu-worker>.workers.dev/test?resumen=ayer"
+# → {"huboClasesAyer": true, "texto": "..."} — devuelve el texto armado
+#   aunque el envío falle por la ventana de 24 h
+```
 
 Cloudflare Free tier soporta hasta 3 Cron Triggers por Worker y 100k
 invocaciones/día — el cron cada 15 minutos son ~96 invocaciones/día, muy
