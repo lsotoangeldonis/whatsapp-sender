@@ -1,90 +1,229 @@
 # whatsapp-sender
 
-Recordatorio diario de clases por WhatsApp, usando un Cloudflare Worker con
-Cron Triggers. Sin servidor propio, sin costo (mientras la WhatsApp Cloud API
-se use en modo prueba y el Worker se mantenga en el plan Free de Cloudflare).
+Asistente académico por WhatsApp para el campus virtual de la Universidad
+Autónoma del Perú, corriendo como un único Cloudflare Worker (sin servidor
+propio). Combina recordatorios automáticos (Cron Triggers) con un chatbot
+interactivo que consulta el campus virtual en vivo.
 
 ## Estado actual
 
 ✅ **Desplegado y en producción** en
-`https://whatsapp-sender.lsotoangeldonis.workers.dev`. La plantilla
-`recordatorio_clases` fue aprobada por Meta el 22 de septiembre de 2026 y los
-Cron Triggers (07:00 y 21:00 hora Lima) ya están enviando mensajes reales sin
-intervención manual.
+`https://whatsapp-sender.lsotoangeldonis.workers.dev`.
 
-✅ **Chatbot interactivo** funcionando sobre el mismo Worker (`/webhook`):
-menú de WhatsApp con respuestas deterministas contra el campus virtual, y
-fallback a Claude (Haiku 4.5) con tool-calling para preguntas libres. Ver
-sección "Chatbot" más abajo.
+✅ **Recordatorios automáticos** (resumen 07:00, aviso 21:00, alerta ~15 min
+antes de cada clase, aviso de pagos por vencer) leyendo el horario **en vivo**
+desde el campus virtual — no hay nada que resembrar cada ciclo académico.
 
-## Cómo funciona
+✅ **Chatbot interactivo** sobre el mismo Worker (`/webhook`): menú de
+WhatsApp con navegación determinista (horario, cursos, sesiones, notas,
+pagos, grabaciones, anuncios, configuración de alertas) y fallback a Claude
+(Haiku 4.5) con tool-calling para preguntas libres.
 
-Dos Cron Triggers (hora Lima, UTC-5):
+## Arquitectura
 
-- **07:00** → resumen de las clases de **hoy**.
-- **21:00** → aviso de las clases de **mañana**.
+```
+src/
+  index.js        Entry point del Worker: scheduled() (crons) + fetch() (webhook/rutas de test)
+  chatbot.js       Menú de WhatsApp, handlers de cada opción, y el loop de Claude para preguntas libres
+  campus.js        Cliente del campus virtual: login + PageMethods reverse-engineered
+  preferencias.js  Preferencias de alertas (on/off), persistidas en Workers KV
+  fechas.js        Helpers de fecha/hora compartidos (todo en hora Lima, UTC-5 fijo)
+```
 
-El Worker lee el horario desde **Workers KV** (fechas literales, sin calcular
-por día de la semana — el periodo tiene excepciones), arma el mensaje y lo
-envía por la WhatsApp Cloud API como mensaje de plantilla (necesario porque
-los envíos son automáticos y siempre caen fuera de la ventana de 24 horas de
-WhatsApp).
+No hay base de datos ni backend propio: Workers KV se usa únicamente para
+(a) las preferencias de alertas y (b) claves de deduplicación de la alerta
+de "próxima clase". El horario, los cursos, notas, pagos, grabaciones y
+anuncios se consultan **en vivo** contra el campus virtual en cada request —
+nada de eso se cachea ni se guarda en el repo (es información personal).
 
-El horario **no vive en este repositorio** — es información personal (tus
-cursos, fechas y horarios reales). Vive únicamente en KV, en tu cuenta de
-Cloudflare, sembrado una vez desde un GitHub Secret (ver Fase C).
+## Cron Triggers
 
-Se incluyen **todas** las sesiones (EN VIVO y Asesoría) del día correspondiente.
+Configurados en `wrangler.toml` (`[triggers] crons`), todos evaluados en
+`index.js` dentro de `scheduled()`:
+
+| Cron (UTC) | Hora Lima | Qué hace | Toggle que lo controla |
+|---|---|---|---|
+| `0 12 * * *` | 07:00 | Resumen de las clases de **hoy** (mensaje de plantilla) + revisa pagos por vencer (≤3 días) | `resumenHoy` / `proximoPago` |
+| `0 2 * * *` | 21:00 (día previo) | Aviso de las clases de **mañana** (mensaje de plantilla) | `avisoManana` |
+| `*/15 * * * *` | cada 15 min | Alerta de texto libre cuando una sesión de hoy empieza en 8–22 min | `proximaClase` |
+
+Los tres respetan las preferencias guardadas en KV (ver "Configurar alertas"
+más abajo) — si un toggle está apagado, el cron corre igual pero no envía
+nada para esa alerta.
+
+- **Resumen/aviso** (07:00 y 21:00) se envían como **mensaje de plantilla**
+  aprobada por Meta (`recordatorio_clases`), porque el envío es automático y
+  siempre cae fuera de la ventana de 24h de conversación de WhatsApp.
+- **Alerta de próxima clase** y **alerta de pago** se envían como **texto
+  libre** (`enviarTexto`) — esto solo funciona dentro de la ventana de 24h
+  desde el último mensaje del usuario al bot. En la práctica, como el
+  usuario interactúa seguido con el chatbot, la ventana casi siempre está
+  abierta; si no lo está, el envío falla silenciosamente (se loguea el
+  error pero no hay reintento ni fallback a plantilla).
+- **Alerta de próxima clase**: ventana de detección 8–22 minutos de
+  anticipación (para no perderse el aviso entre dos corridas de 15 min),
+  con dedupe en KV (`alerta_clase:<fechaISO>:<horaInicio>:<curso>`, TTL 24h)
+  para no repetir el mismo aviso en la siguiente corrida.
+- **Alerta de pago**: corre una vez al día (enganchada al cron de 07:00),
+  compara `FecVenc` de cada cuota pendiente contra hoy, avisa si vence en
+  0–3 días.
+
+Cloudflare Free tier soporta hasta 3 Cron Triggers por Worker y 100k
+invocaciones/día — el cron cada 15 minutos son ~96 invocaciones/día, muy
+lejos del límite.
 
 ## Chatbot (WhatsApp interactivo)
 
-Además del recordatorio automático, el mismo Worker atiende mensajes
-entrantes en `/webhook`:
+### Cómo se entra al menú
 
-- Al escribir **"menu"** (o "menú", "hola", "inicio", "ayuda") se envía un
-  mensaje interactivo tipo lista con 5 consultas rápidas (horario de hoy,
-  próxima clase, cursos, notas/avance, pagos pendientes) más la opción
-  "Otra pregunta". Estas opciones llaman directo a `src/campus.js` y
-  formatean texto fijo — **no pasan por Claude**, costo cero de API.
-- Cualquier otro texto libre se manda a Claude (`claude-haiku-4-5`) con
-  tool-calling sobre 5 herramientas que consultan el campus virtual en
-  vivo (`src/chatbot.js`).
-- `src/campus.js` reproduce el login de ASP.NET Forms Authentication del
-  campus virtual (usuario/contraseña en `CAMPUS_USUARIO`/`CAMPUS_PASSWORD`)
-  y llama a los PageMethods internos (`Alu_ObtenerCursosActuales`,
-  `Alu_ObtenerHorarioClase`, `ObtenerDataAvanceCarrera`, etc.).
+Escribir **"menu"** (o "menú", "hola", "inicio", "ayuda") muestra el menú
+principal. Cualquier otro texto libre se manda a Claude con tool-calling.
 
-### Configuración del webhook en Meta
+### Menú principal
 
-1. En tu app de Meta → **WhatsApp → Configuración → Webhook**, la URL de
-   callback es `https://<tu-worker>.workers.dev/webhook` y el token de
-   verificación debe coincidir con el secret `WEBHOOK_VERIFY_TOKEN`.
-2. Suscribe el campo **`messages`**.
-3. **La app debe estar en modo Live ("Publicada"), no en Development** —
-   en Development, Meta solo entrega payloads simulados (botón "Probar"),
-   nunca mensajes reales de usuarios. Publica la app desde **Casos de
-   uso → Publicar** (puede pedir una URL de política de privacidad; basta
-   con apuntar al README del repo, ej.
-   `https://github.com/lsotoangeldonis/whatsapp-sender#readme`).
-4. **La WABA debe estar suscrita a la app.** El webhook a nivel de app
-   puede estar perfecto y aun así no recibir nada si este paso quedó
-   pendiente (típico si el número de prueba se creó desde API Setup en
-   vez de un flujo de Embedded Signup). Se hace con:
+Mensaje interactivo tipo **lista** (WhatsApp limita a **10 filas en total**
+entre todas las secciones — el menú principal está exactamente en ese
+límite, por eso las opciones nuevas se agregan como submenús en vez de
+filas sueltas):
 
-   ```
-   POST https://graph.facebook.com/v25.0/<WABA_ID>/subscribed_apps
-   Authorization: Bearer <WHATSAPP_TOKEN>
-   ```
+**Sección "Consultas rápidas":**
+- 📅 Horario → abre el submenú de horario
+- Próxima clase (Zoom) → próxima sesión con link directo de Zoom
+- Mis cursos → lista de cursos matriculados con docente, horario y sílabo
+- Ver un curso → lista de cursos → lista de sesiones → contenido de la sesión
+- Mis notas / avance → notas de cursos aprobados + avance de créditos
+- Pagos pendientes → cuotas pendientes con monto y vencimiento
+- Grabaciones recientes → últimas 5 grabaciones de Zoom (todos los cursos)
+- Anuncios y eventos → últimos 5 posts del tablero de la universidad
 
-   El Worker expone un atajo protegido por `TEST_TOKEN` para esto:
+**Sección "Otro":**
+- Otra pregunta → invita a escribir texto libre (va a Claude)
+- ⚙️ Configurar alertas → submenú de toggles
 
-   ```
-   GET /subscribe-app?token=<TEST_TOKEN>&waba_id=<WABA_ID>
-   ```
+### Submenú "📅 Horario"
 
-   El `WABA_ID` (WhatsApp Business Account ID) se ve en la pantalla
-   **API Setup**. Solo hace falta correrlo una vez, salvo que Meta la
-   des-suscriba (ej. tras cambios grandes en la app).
+6 opciones, todas agrupan `getHorarioDetallado` (el mismo endpoint que usa
+el recordatorio automático) por rango de fechas en hora Lima:
+
+- **Hoy** / **Mañana** / **Esta semana** / **Siguiente semana** — formato
+  "detallado" (`formatearBloques`): un bloque por fecha con día de la
+  semana, y una línea por sesión (hora, curso, tipo).
+- **Este mes** / **Siguiente mes** — formato "compacto" (`formatearLineas`):
+  una sola línea por fecha (día abreviado + todas las sesiones separadas por
+  `·`), para no acercarse al límite de 4096 caracteres de un mensaje de
+  WhatsApp; si aun así se pasa de ~3800 caracteres, se trunca con un aviso.
+
+"Semana" va de lunes a domingo (`lunesDeSemana()`); "mes" va del día 1 al
+último día del mes calendario.
+
+Nota: **"Próxima clase (Zoom)"** es una fuente de datos distinta
+(`getProximasSesiones`, basada en `start_url` de Zoom) — no pasa por
+`getHorarioDetallado` porque es la única que trae el link directo para
+unirse a la reunión.
+
+### "Ver un curso" (navegación de 3 niveles)
+
+1. `menu_ver_curso` → lista los cursos matriculados (`curso_<nGruCodigo>`).
+2. Elegir un curso → lista sus sesiones (`sesion_<nGruCodigo>_<numSesion>`),
+   ordenadas **descendente** (más reciente primero), con etiquetas
+   `(Actual)` en la sesión activa y `(Última)` en la sesión cerrada más
+   reciente. Como WhatsApp limita a 10 filas, la ventana de 10 sesiones se
+   **centra en la sesión activa** (no siempre son las 10 de número más
+   alto — un curso con muchas sesiones futuras ya cargadas en el sílabo
+   dejaría fuera la actual/última si se tomara el corte ingenuo).
+3. Elegir una sesión → devuelve texto con: sílabo (link), rango de fechas de
+   la sesión, tema/logro de la semana, recursos de esa sesión específica
+   (links de tipo "Enlace"; los de tipo "Archivo" no traen URL confirmada,
+   así que solo se menciona que están en el campus virtual), y la
+   grabación de Zoom si existe (cruzada por asignatura + número de sesión
+   contra `getGrabaciones`).
+
+### "⚙️ Configurar alertas"
+
+Lista con 4 toggles (✅ activo / 🔕 apagado), uno por cada notificación
+automática del sistema — **incluye los dos crons originales de resumen y
+aviso, no solo las alertas nuevas**:
+
+| Campo (KV) | Etiqueta en el menú | Controla |
+|---|---|---|
+| `resumenHoy` | Resumen 07:00 | Cron 07:00, resumen de clases de hoy |
+| `avisoManana` | Aviso 21:00 | Cron 21:00, aviso de clases de mañana |
+| `proximaClase` | Próxima clase | Alerta cada 15 min, ~15 min antes de cada sesión |
+| `proximoPago` | Próximo pago | Aviso de cuotas que vencen en ≤3 días |
+
+Tocar una fila invierte ese campo, lo guarda en KV
+(`preferencias.js` → `guardarPreferenciasAlertas`) y vuelve a mostrar la
+lista actualizada. Todos empiezan en `true` por defecto (ver
+`POR_DEFECTO` en `src/preferencias.js`).
+
+### Preguntas libres → Claude con tool-calling
+
+Cualquier texto que no sea "menu"/saludo se manda a
+`claude-haiku-4-5` (Messages API) con un loop de tool-calling (máx. 4
+vueltas) sobre estas herramientas, todas ejecutadas contra el campus en
+vivo (`ejecutarHerramienta` en `chatbot.js`):
+
+| Herramienta | Qué devuelve |
+|---|---|
+| `get_horario_detallado` | Calendario completo del periodo (fecha, hora, curso, ambiente, docente) |
+| `get_proximas_sesiones` | Sesiones de Zoom de hoy y próximas, con link |
+| `get_cursos` | Cursos matriculados: docente, horario, fechas, sílabo |
+| `get_notas_avance` | Notas de cursos aprobados/en proceso + avance de créditos |
+| `get_pagos_pendientes` | Cuotas pendientes con monto y vencimiento |
+| `get_contenido_curso` | Sílabo + temario semana a semana + recursos de un curso (param `curso`) |
+| `get_grabaciones` | Grabaciones de Zoom pasadas, opcionalmente filtradas por curso |
+| `get_anuncios` | Anuncios/eventos recientes del tablero de la universidad |
+
+**Formato WhatsApp, no Markdown estándar**: el `SYSTEM_PROMPT` instruye
+explícitamente a Claude a usar `*negrita con un solo asterisco*` (no
+`**doble**`, que WhatsApp no renderiza), `_cursiva_` y listas con guiones
+simples — esto costó un bug real (Claude usaba `**` por default) antes de
+agregar la instrucción.
+
+## Endpoints del campus virtual (reverse-engineered)
+
+Todos son PageMethods de ASP.NET: `POST` con `Content-Type:
+application/json; charset=UTF-8` y header `X-Requested-With:
+XMLHttpRequest`, autenticados con las cookies de sesión. La respuesta viene
+envuelta como `{"d": "<json-string>"}` — `llamarMetodo()` en `campus.js`
+hace el parse doble (`JSON.parse(datos.d)`).
+
+### Login
+
+`POST /Campus/Login.aspx` reproduce el flujo de **ASP.NET Forms
+Authentication**: primero un `GET` a la misma URL para extraer
+`__VIEWSTATE`/`__VIEWSTATEGENERATOR`/`__EVENTVALIDATION` (tokens de un solo
+uso atados a la sesión) y la cookie `ASP.NET_SessionId`, luego un `POST`
+con esos tokens más `txtUsuario`/`txtPassword`. La respuesta trae la cookie
+`.ASPXFORMSAUTH`. La cookie combinada (`ASP.NET_SessionId=...;
+.ASPXFORMSAUTH=...`) es la que se manda en cada llamada posterior — no hay
+sesión persistente entre requests del Worker, se hace login en cada
+invocación (`loginCampus()`).
+
+### PageMethods usados
+
+| Endpoint | Payload | Uso |
+|---|---|---|
+| `/Campus/Default.aspx/Alu_ObtenerCursosActuales` | `{}` | Cursos matriculados del periodo actual (`getCursosActuales`), incluye `nGruCodigo` (clave para cruzar con sesiones/grabaciones) y `cSilabo` (link relativo al sílabo) |
+| `/CampusVirtual/ua/Alumno/MisCursos/Alu_HorarioClase.aspx/Alu_ObtenerHorarioClase` | `{cAsignatura: '', cPerCodigo: '', cTablas: 'HORARIO_DETALLADO,HORARIO_DE_HOY,HORARIO_ACTUAL', nPerAluRegCodigo: 0}` | Calendario completo de sesiones (`getHorarioDetallado`), se usa `HORARIO_DETALLADO`: `cFecha` (DD/MM/YYYY), `cHoraInicio`, `cHoraFin`, `cAsignatura`, `cAmbiente`, `cDocente` |
+| `/Campus/Default.aspx/obtenerSesionesVirtualesHoyProxima` | `{}` | Sesiones de Zoom de hoy y próximas con `start_url` (`getProximasSesiones`) |
+| `/Campus/ua/MisFinanzas/Camp_Virt_PagosPendientes.aspx/Alu_ObtenerPagosPendientes` | `{cPerCodigo: ''}` | Cuotas pendientes (`getPagosPendientes`): `NroCuota`, `TotalText`, `FecVenc` (DD/MM/YYYY) |
+| `/Campus/ua/Tablero/Perfil/Camp_Virt_Perfil.aspx/USP_CAMP_ObtenerCurriculas_By_cPercodigo` | `{cAcion: 2}` | Resuelve `nPerAluRegCodigo` (matrícula del periodo activo) en vivo (`getRegistroActual`) — no se hardcodea porque cambia entre periodos |
+| `/campus/ua/Tablero/Perfil/Camp_Virt_Perfil.aspx/ObtenerDataAvanceCarrera` | `{cPerCodigo: '', cTablas: 'Malla_Curricular,Malla_Curricular_grafAvanceCarrera', nPerAluRegCodigo}` | Malla curricular (notas, estado por curso) + avance de créditos (`getAvanceCarrera`) |
+| `/Campus/Default.aspx/getInformationDetailCurso` | `{nGruCodigo: Number(nGruCodigo), nSesion: 0, nPerfil: 13}` | Sílabo semana a semana + recursos de un curso (`getDetalleSesionesCurso`). `nSesion: 0` + `nPerfil: 13` (perfil alumno) trae **todas** las sesiones, no una sola; `datos.silabo[].sesion_activa === 1` marca la sesión activa |
+| `/Campus/Default.aspx/getCurriculaAlumno` | `{}` | Currículas del alumno, con `arrayPeriodo` (JSON serializado como string) — insumo para resolver `nCurCodigo`/`nPrdCodigo` que pide `obtenerCursosSesionesOnline` |
+| `/Campus/ua/Tablero/Perfil/Camp_Virt_Perfil.aspx/getRequisitosIngresantesPersona` | `{nTipo: 1}` | Resuelve `cPerCodigo` (identificador interno del alumno, **distinto** del código universitario visible) del lado del servidor a partir de la sesión — ver nota abajo |
+| `/CampusVirtual/SesionesOnline/Sesiones.aspx/obtenerCursosSesionesOnline` | `{nCurCodigo, cPerCodigo, nPrdCodigo}` | Grabaciones de Zoom por sesión (`getGrabaciones`): `grabaciones` viene como JSON-string con objetos `{play_url}`; se cruza con `sesionSemana` para saber a qué sesión del curso corresponde |
+| `/CampusVirtual/ua/Def_Estudiante.aspx/getInfoAlumno` | `{endpoint: 'muro_web'}` | Tablero de anuncios/eventos de la universidad (`getMuro`): mismo feed que el Panel principal del campus. `pContenido` viene en HTML, se limpia con `quitarHtml()` |
+
+**Nota sobre `cPerCodigo`**: en un primer intento se asumió que había que
+pedirlo como input manual (nuevo GitHub Secret). Antes de agregarlo se
+confirmó si algún endpoint ya lo devolvía — resultó que
+`getRequisitosIngresantesPersona` lo resuelve completamente del lado del
+servidor a partir de la cookie de sesión, así que **no hace falta ningún
+secret nuevo**: `resolverCPerCodigo()` en `campus.js` lo pide on-demand,
+en paralelo con `getCurriculaAlumno`, cada vez que se llama
+`getGrabaciones`.
 
 ## Fase A — Meta (en el navegador, sin código)
 
@@ -114,11 +253,10 @@ entrantes en `/webhook`:
      de línea, tabs o más de 4 espacios seguidos. Ejemplo:
      `18:00–19:30 Análisis Integral en 3D (Asesoría) · 21:20–22:50 Programación Estructurada (Asesoría)`.
 
-   Las plantillas de utilidad suelen aprobarse en minutos u horas (en este
-   proyecto tardó cerca de 8 horas). El nombre debe coincidir con
-   `WHATSAPP_TEMPLATE_NAME` (por defecto `recordatorio_clases`) — ya está
-   **aprobada y activa**, este paso solo hace falta si la recreas o agregas
-   una plantilla nueva (ej. para otro periodo académico).
+   Las plantillas de utilidad suelen aprobarse en minutos u horas. El
+   nombre debe coincidir con `WHATSAPP_TEMPLATE_NAME` (por defecto
+   `recordatorio_clases`) — ya está **aprobada y activa**, este paso solo
+   hace falta si la recreas o agregas una plantilla nueva.
 5. En **Business Suite → Configuración → Usuarios → Usuarios del sistema**,
    crea un usuario del sistema, asígnale la app de WhatsApp con permisos
    `whatsapp_business_messaging` y `whatsapp_business_management`, y genera un
@@ -127,6 +265,45 @@ entrantes en `/webhook`:
 6. Anota: el token permanente, el **Phone Number ID** y el
    **WhatsApp Business Account ID** (visibles en API Setup), y tu número de
    destino en formato internacional sin el signo más (ej. `51987654321`).
+7. **Publica la app** (Casos de uso → Publicar) y **suscribe la WABA al
+   webhook** — ver la sección siguiente. Sin esto, el webhook nunca recibe
+   mensajes reales de usuarios (solo simulacros).
+
+## Configuración del webhook (chatbot)
+
+1. En tu app de Meta → **WhatsApp → Configuración → Webhook**, la URL de
+   callback es `https://<tu-worker>.workers.dev/webhook` y el token de
+   verificación debe coincidir con el secret `WEBHOOK_VERIFY_TOKEN`.
+2. Suscribe el campo **`messages`**.
+3. **La app debe estar en modo Live ("Publicada"), no en Development** —
+   en Development, Meta solo entrega payloads simulados (botón "Probar"),
+   nunca mensajes reales de usuarios. Publica la app desde **Casos de
+   uso → Publicar** (puede pedir una URL de política de privacidad; basta
+   con apuntar al README del repo, ej.
+   `https://github.com/lsotoangeldonis/whatsapp-sender#readme`).
+4. **La WABA debe estar suscrita a la app.** El webhook a nivel de app
+   puede estar perfecto y aun así no recibir nada si este paso quedó
+   pendiente (típico si el número de prueba se creó desde API Setup en
+   vez de un flujo de Embedded Signup). Se hace con:
+
+   ```
+   POST https://graph.facebook.com/v25.0/<WABA_ID>/subscribed_apps
+   Authorization: Bearer <WHATSAPP_TOKEN>
+   ```
+
+   El Worker expone un atajo protegido por `TEST_TOKEN` para esto:
+
+   ```
+   GET /subscribe-app?token=<TEST_TOKEN>&waba_id=<WABA_ID>
+   ```
+
+   El `WABA_ID` (WhatsApp Business Account ID) se ve en la pantalla
+   **API Setup**. Solo hace falta correrlo una vez, salvo que Meta la
+   des-suscriba (ej. tras cambios grandes en la app). Si se llama con el ID
+   equivocado (ej. `phone_number_id` en vez del WABA ID), la Graph API
+   responde `Unsupported post request. Object with ID '...' does not
+   exist...` (code 100, subcode 33) — hay que usar el WABA ID, no el
+   Phone Number ID.
 
 ## Fase B — Proyecto local
 
@@ -141,7 +318,9 @@ npm install
 El workflow `.github/workflows/deploy.yml` despliega el Worker en cada push a
 `main`, o manualmente desde la pestaña **Actions** del repo (botón
 "Run workflow"). Corre en los servidores de GitHub, así que no depende de tu
-máquina ni de la red de quien lo ejecute.
+máquina ni de la red de quien lo ejecute. **Este es también el único
+mecanismo de despliegue usado en este proyecto** (el sandbox de desarrollo
+no tiene salida de red hacia Cloudflare/Meta/el campus).
 
 1. En GitHub: **Settings → Secrets and variables → Actions → New repository
    secret**, y agrega estos secrets (nunca quedan visibles después de
@@ -154,27 +333,25 @@ máquina ni de la red de quien lo ejecute.
    | `WHATSAPP_TOKEN` | Token permanente del usuario del sistema (Fase A.5) |
    | `PHONE_NUMBER_ID` | De la pantalla API Setup |
    | `DESTINATARIO` | Tu número, formato internacional sin `+` (ej. `51987654321`) |
-   | `TEST_TOKEN` | Uno propio, aleatorio, para proteger los endpoints `/test` y `/subscribe-app` |
+   | `TEST_TOKEN` | Uno propio, aleatorio, para proteger los endpoints `/test`, `/debug-horario` y `/subscribe-app` |
    | `WHATSAPP_TEMPLATE_NAME` | Nombre de la plantilla aprobada (ej. `recordatorio_clases`) |
    | `WHATSAPP_TEMPLATE_LANG` | Código de idioma de la plantilla (ej. `es`) |
-   | `HORARIO_JSON` | El contenido completo de tu horario en JSON (ver abajo) — solo se usa una vez para sembrar KV, nunca queda en el código |
-   | `ANTHROPIC_API_KEY` | Clave de la Claude Console, para el fallback de preguntas libres del chatbot |
+   | `ANTHROPIC_API_KEY` | Clave de la Claude Console, para el chatbot (preguntas libres, tool-calling) |
    | `CAMPUS_USUARIO` | Usuario del campus virtual |
    | `CAMPUS_PASSWORD` | Contraseña del campus virtual |
    | `WEBHOOK_VERIFY_TOKEN` | Uno propio, aleatorio, para el handshake de verificación del webhook de Meta |
+
+   No hace falta ningún secret para `cPerCodigo` — se resuelve dinámicamente
+   en cada request (ver sección de endpoints).
 
 2. Ve a la pestaña **Actions → Deploy Worker → Run workflow**, elige esta
    rama y ejecútalo. También se dispara solo en cada push a `main`.
 3. Revisa el log del job: la acción `cloudflare/wrangler-action` imprime la
    URL del Worker desplegado (`https://whatsapp-sender.<tu-subdominio>.workers.dev`).
 4. **Namespace de KV** — ya está creado (`HORARIO_KV`, ver `wrangler.toml`).
-   Si alguna vez necesitas recrearlo desde cero: **Actions → Setup KV
-   Namespace → Run workflow**, y copia el `id` que imprime el log al
-   `[[kv_namespaces]]` de `wrangler.toml`.
-5. **Sembrar el horario en KV** — con el secret `HORARIO_JSON` ya cargado:
-   **Actions → Seed KV Horario → Run workflow**. Repite este paso cada vez
-   que cambies el contenido del secret `HORARIO_JSON` (por ejemplo, para un
-   nuevo periodo académico).
+   Hoy solo guarda las preferencias de alertas (clave `alertas`) y las
+   claves de dedupe de la alerta de próxima clase (`alerta_clase:*`, TTL
+   24h) — **ya no guarda el horario** (ver "Legado" más abajo).
 
 ### Opción B: desde tu propia terminal
 
@@ -184,9 +361,13 @@ npx wrangler login
 npx wrangler secret put WHATSAPP_TOKEN
 npx wrangler secret put PHONE_NUMBER_ID
 npx wrangler secret put DESTINATARIO
-npx wrangler secret put TEST_TOKEN          # token propio, para el endpoint /test
+npx wrangler secret put TEST_TOKEN
 npx wrangler secret put WHATSAPP_TEMPLATE_NAME   # opcional, default: recordatorio_clases
 npx wrangler secret put WHATSAPP_TEMPLATE_LANG   # opcional, default: es
+npx wrangler secret put ANTHROPIC_API_KEY
+npx wrangler secret put CAMPUS_USUARIO
+npx wrangler secret put CAMPUS_PASSWORD
+npx wrangler secret put WEBHOOK_VERIFY_TOKEN
 
 npm run deploy
 ```
@@ -195,25 +376,36 @@ npm run deploy
 
 | Workflow | Trigger | Qué hace |
 |---|---|---|
-| `deploy.yml` | Push a `main`, o manual | Despliega el Worker con `wrangler deploy`. |
-| `setup-kv.yml` | Manual | Crea el namespace `HORARIO_KV` en Cloudflare. Ya se corrió una vez; solo hace falta de nuevo si se borra el namespace. |
-| `seed-kv.yml` | Manual | Sube el contenido del secret `HORARIO_JSON` a KV. Correr cada vez que cambie el horario (ej. nuevo periodo académico). |
-| `check-template.yml` | **Solo manual** | Prueba el endpoint `/test` real contra la fecha `2026-09-22`, con la plantilla configurada por defecto. Acepta un input opcional `extra` para overrides (ej. `plantilla=hello_world&idioma=en_US`). |
+| `deploy.yml` | Push a `main`, o manual | Despliega el Worker con `wrangler deploy` (secrets vía `cloudflare/wrangler-action`). |
+| `check-template.yml` | **Solo manual** | Prueba el endpoint `/test` real contra una fecha fija, con la plantilla configurada por defecto. Acepta un input opcional `extra` para overrides (ej. `plantilla=hello_world&idioma=en_US`). |
+| `setup-kv.yml` | Manual | *(Legado, ver abajo)* Crea el namespace `HORARIO_KV` en Cloudflare. Ya no hace falta salvo que se borre el namespace. |
+| `seed-kv.yml` | Manual | *(Legado, ver abajo)* Sube el contenido del secret `HORARIO_JSON` a KV bajo la clave `horario`. Nada en el código actual lee esa clave. |
 
 > ⚠️ **`check-template.yml` nunca debe llevar un trigger `schedule`.**
 > Este workflow llama al endpoint `/test` **real** — si la plantilla ya está
-> aprobada, cada corrida envía un WhatsApp de verdad. Se usó temporalmente
-> con un cron cada 20 minutos para monitorear la aprobación de la plantilla,
-> y una vez aprobada empezó a duplicar el mensaje de producción cada 20
-> minutos hasta que se detectó y se quitó el `schedule`. Úsalo solo con
+> aprobada, cada corrida envía un WhatsApp de verdad. Úsalo solo con
 > `workflow_dispatch` manual, puntual.
+
+### Legado: `HORARIO_JSON` / `setup-kv.yml` / `seed-kv.yml`
+
+El diseño original leía el horario desde una copia estática en Workers KV,
+sembrada a mano desde el secret `HORARIO_JSON` cada vez que cambiaba el
+periodo académico. Esto se migró a lectura en vivo desde
+`getHorarioDetallado` (ver `obtenerHorario()` en `index.js`) para que el
+recordatorio se adapte solo a cualquier ciclo nuevo y a las excepciones de
+calendario que resuelve el propio campus. El secret `HORARIO_JSON`, el
+namespace KV bajo la clave `horario`, y los workflows `setup-kv.yml` /
+`seed-kv.yml` quedaron sin uso — se mantienen en el repo por si se necesita
+reactivar ese modo (ej. si el campus virtual cambia de endpoint y hace
+falta un fallback estático), pero no son parte del flujo activo.
 
 ## Pruebas
 
 > ⚠️ Con la plantilla ya aprobada, el endpoint `/test` **envía un WhatsApp
 > real** cada vez que encuentra sesiones para la fecha consultada (no es un
-> simulacro). Los ejemplos de fechas sin clases (`sin_clases`) siguen siendo
-> inofensivos porque no llegan a llamar a la API de Meta.
+> simulacro). Prefiere `curl` en vez del navegador: como `/test` ahora hace
+> login + llamadas en vivo al campus, tarda más, y un reintento automático
+> del navegador en una request lenta puede disparar el envío dos veces.
 
 1. **Meta funciona** — plantilla `hello_world` desde API Setup (Fase A.3).
 2. **Credenciales desde la terminal**:
@@ -233,53 +425,65 @@ npm run deploy
    ```
 
    Esto expone `/__scheduled` para disparar el cron a demanda sin esperar la
-   hora real. Nota: `wrangler dev` usa por defecto un KV **local** vacío (no
-   el namespace remoto), así que sin sembrarlo aparte va a devolver
-   `sin_clases` para cualquier fecha. Para probar contra los datos reales
-   localmente, agrega `--remote` a `npm run dev` / `npm run dev:cron`.
+   hora real.
 
-4. **Lógica de fechas** (usa el endpoint manual una vez desplegado, o
-   `wrangler dev`):
+4. **Recordatorio manual** (usa `curl`, no el navegador — ver nota arriba):
 
    ```bash
    curl "https://<tu-worker>.workers.dev/test?token=<TEST_TOKEN>&fecha=2026-09-22"
-   # → debe devolver dos asesorías (enviado: true)
-
-   curl "https://<tu-worker>.workers.dev/test?token=<TEST_TOKEN>&fecha=2026-09-21"
-   # → debe devolver sin_clases
-
-   curl "https://<tu-worker>.workers.dev/test?token=<TEST_TOKEN>&fecha=2026-10-08"
-   # → debe devolver sin_clases (excepción: no hay Programación Estructurada)
-
-   curl "https://<tu-worker>.workers.dev/test?token=<TEST_TOKEN>&fecha=2026-12-20"
-   # → fuera del periodo, sin_clases (no hay entrada en KV para esa fecha)
+   # → sesiones de esa fecha en vivo desde el campus (enviado: true) o sin_clases
    ```
 
-5. **Producción** — tras `npm run deploy`, revisa los logs con
-   `npm run tail` y espera el primer disparo real. El dashboard de
-   Cloudflare muestra el historial de ejecuciones del cron.
+5. **Horario crudo** (diagnóstico, sin enviar nada):
+
+   ```bash
+   curl "https://<tu-worker>.workers.dev/debug-horario?token=<TEST_TOKEN>&curso=Programación"
+   # → JSON con las sesiones de HORARIO_DETALLADO que matchean el filtro
+   ```
+
+6. **Chatbot**: escribe "menu" al número de WhatsApp configurado y navega las
+   opciones; o escribe una pregunta libre para probar el tool-calling con
+   Claude.
+7. **Producción** — tras un deploy, revisa los logs con `npm run tail` y
+   espera el primer disparo real. El dashboard de Cloudflare muestra el
+   historial de ejecuciones de cada cron.
 
 ## Limitaciones conocidas
 
-- **Ventana de 24 horas de WhatsApp**: como el envío es automático, siempre
-  cae fuera de la ventana de conversación abierta. Por eso el mensaje se
-  manda como plantilla aprobada (Fase A.4), no como texto libre.
-- **5 destinatarios verificados como máximo** en modo prueba.
+- **Ventana de 24 horas de WhatsApp**: los mensajes de texto libre (alertas
+  de próxima clase/pago, y todas las respuestas del chatbot) solo se
+  entregan si el usuario interactuó con el bot en las últimas 24h. El
+  resumen/aviso diario esquiva esto usando plantilla aprobada.
+- **5 destinatarios verificados como máximo** en modo prueba de Meta.
 - **El número de test puede reciclarse** si la app queda inactiva mucho
   tiempo — si el envío falla de golpe, revisa que `PHONE_NUMBER_ID` siga
   siendo válido.
 - **Cron Triggers de Cloudflare no son exactos al segundo** — pueden
-  ejecutarse con algunos minutos de retraso, irrelevante para un recordatorio
-  diario.
+  ejecutarse con algunos minutos de retraso; irrelevante para recordatorios
+  diarios, y cubierto por la ventana de 8–22 min en la alerta de clase.
+- **Sesión del campus por request**: cada llamada a `loginCampus()` hace un
+  login completo (no hay sesión persistente entre invocaciones del Worker),
+  así que cada opción del menú o herramienta de Claude paga ese costo. Es
+  aceptable para el volumen de uso actual (un solo usuario).
+- **Recursos tipo "Archivo"** (PDF/PPT subidos al campus) no traen una URL
+  absoluta confiable en la respuesta del endpoint — el bot solo avisa que
+  están disponibles en el campus virtual, sin link directo.
 - **Alternativa**: si el tema de plantillas de WhatsApp se complica,
   Telegram Bot API es más simple (sin ventana de 24h, sin plantillas, sin
   verificación de negocio) y reutiliza el mismo Worker con un solo `fetch`.
 
 ## Decisiones tomadas
 
-- Envío en **ambos** horarios: 07:00 (resumen de hoy) y 21:00 (aviso de
-  mañana), hora Lima.
+- Horario, cursos, notas, pagos, grabaciones y anuncios se consultan **en
+  vivo** contra el campus virtual — nada de eso vive en el repo (es
+  información personal) ni se cachea en KV.
+- Envío automático en **tres** momentos: 07:00 (resumen de hoy), 21:00
+  (aviso de mañana) y cada 15 min (alerta de próxima clase por empezar),
+  más una revisión diaria de pagos por vencer — todos configurables on/off
+  desde el propio chatbot.
 - Se avisan **todas** las sesiones, EN VIVO y Asesoría.
-- Canal: **WhatsApp Cloud API**.
-- Horario en **Workers KV**, fuera del repositorio (es información personal:
-  tus cursos, fechas y horarios reales).
+- Canal: **WhatsApp Cloud API**, con Claude (Haiku 4.5) como fallback de
+  lenguaje natural sobre las mismas fuentes de datos que usa el menú.
+- El menú de WhatsApp se organiza en submenús (Horario; Ver un curso →
+  sesiones → contenido; Configurar alertas) en vez de una lista plana,
+  porque WhatsApp limita los mensajes tipo lista a 10 filas en total.
