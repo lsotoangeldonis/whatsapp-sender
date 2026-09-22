@@ -28,7 +28,6 @@ jobs:
             CAMPUS_USUARIO
             CAMPUS_PASSWORD
             WEBHOOK_VERIFY_TOKEN
-            CAMPUS_PER_CODIGO
         env:
           WHATSAPP_TOKEN: ${{ secrets.WHATSAPP_TOKEN }}
           PHONE_NUMBER_ID: ${{ secrets.PHONE_NUMBER_ID }}
@@ -40,4 +39,3 @@ jobs:
           CAMPUS_USUARIO: ${{ secrets.CAMPUS_USUARIO }}
           CAMPUS_PASSWORD: ${{ secrets.CAMPUS_PASSWORD }}
           WEBHOOK_VERIFY_TOKEN: ${{ secrets.WEBHOOK_VERIFY_TOKEN }}
-          CAMPUS_PER_CODIGO: ${{ secrets.CAMPUS_PER_CODIGO }}

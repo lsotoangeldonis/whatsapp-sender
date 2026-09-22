@@ -163,8 +163,8 @@ function fechaSesionATimestamp(fecha) {
   return new Date(anio, mes - 1, dia, h, m).getTime();
 }
 
-async function manejarGrabaciones(cookie, env) {
-  const sesiones = await getGrabaciones(cookie, env.CAMPUS_PER_CODIGO);
+async function manejarGrabaciones(cookie) {
+  const sesiones = await getGrabaciones(cookie);
   const recientes = sesiones.sort((a, b) => fechaSesionATimestamp(b.fecha) - fechaSesionATimestamp(a.fecha)).slice(0, 5);
   if (recientes.length === 0) return 'No encontré grabaciones disponibles todavía.';
   const lineas = recientes.map(
@@ -219,7 +219,7 @@ export async function manejarOpcionMenu(env, para, idOpcion) {
   }
   try {
     const cookie = await loginCampus(env);
-    const texto = await handler(cookie, env);
+    const texto = await handler(cookie);
     await enviarTexto(env, para, texto);
   } catch (error) {
     console.error('Error consultando el campus', error);
@@ -279,7 +279,7 @@ const HERRAMIENTAS = [
   },
 ];
 
-async function ejecutarHerramienta(cookie, env, nombre, input) {
+async function ejecutarHerramienta(cookie, nombre, input) {
   switch (nombre) {
     case 'get_horario_detallado':
       return getHorarioDetallado(cookie);
@@ -301,7 +301,7 @@ async function ejecutarHerramienta(cookie, env, nombre, input) {
       return { curso: curso.asignatura, silabo: curso.silabo, ...detalle };
     }
     case 'get_grabaciones': {
-      const sesiones = await getGrabaciones(cookie, env.CAMPUS_PER_CODIGO);
+      const sesiones = await getGrabaciones(cookie);
       if (!input?.curso) return sesiones;
       return sesiones.filter((s) => s.asignatura.toUpperCase().includes(input.curso.toUpperCase()));
     }
@@ -362,7 +362,7 @@ export async function responderPreguntaLibre(env, para, pregunta) {
     const resultados = await Promise.all(
       bloquesHerramienta.map(async (bloque) => {
         try {
-          const resultado = await ejecutarHerramienta(cookie, env, bloque.name, bloque.input);
+          const resultado = await ejecutarHerramienta(cookie, bloque.name, bloque.input);
           return { type: 'tool_result', tool_use_id: bloque.id, content: JSON.stringify(resultado) };
         } catch (error) {
           return { type: 'tool_result', tool_use_id: bloque.id, content: String(error), is_error: true };

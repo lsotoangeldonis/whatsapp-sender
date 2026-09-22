@@ -132,10 +132,19 @@ export async function getDetalleSesionesCurso(cookie, nGruCodigo) {
 }
 
 // cPerCodigo identifica al alumno internamente (distinto del código
-// universitario visible en pantalla) y no viene en ningún endpoint ya
-// usado, así que se recibe como parámetro (viene de un secret).
-export async function getGrabaciones(cookie, cPerCodigo) {
-  const curriculas = await llamarMetodo(cookie, '/Campus/Default.aspx/getCurriculaAlumno', {});
+// universitario visible en pantalla). No hace falta pedirlo como input:
+// getRequisitosIngresantesPersona lo resuelve del lado del servidor a
+// partir de la sesión y lo trae en la respuesta.
+async function resolverCPerCodigo(cookie) {
+  const datos = await llamarMetodo(cookie, '/Campus/ua/Tablero/Perfil/Camp_Virt_Perfil.aspx/getRequisitosIngresantesPersona', { nTipo: 1 });
+  return datos[0]?.cPerCodigo;
+}
+
+export async function getGrabaciones(cookie) {
+  const [curriculas, cPerCodigo] = await Promise.all([
+    llamarMetodo(cookie, '/Campus/Default.aspx/getCurriculaAlumno', {}),
+    resolverCPerCodigo(cookie),
+  ]);
   const curricula = curriculas.find((c) => c.nTipCur === 1) || curriculas[0];
   const periodos = JSON.parse(curricula.arrayPeriodo);
   const datos = await llamarMetodo(cookie, '/CampusVirtual/SesionesOnline/Sesiones.aspx/obtenerCursosSesionesOnline', {
