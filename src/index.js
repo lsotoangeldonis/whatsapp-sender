@@ -20,10 +20,35 @@ function fechaLegible(fechaISO, prefijo) {
   return `${prefijo} ${diaSemana} ${dia} de ${MESES[mes - 1]}`;
 }
 
-// El horario vive en Workers KV (clave "horario", JSON con el mismo
-// formato que antes tenía horario.json), no en el repositorio.
+// DD/MM/YYYY (formato del campus) -> YYYY-MM-DD
+function fechaISODesdeCampus(cFecha) {
+  const [dia, mes, anio] = cFecha.split('/');
+  return `${anio}-${mes}-${dia}`;
+}
+
+// El campus no manda un campo "tipo" explícito: cAmbiente vale "Asesoría"
+// para las asesorías y "ZOOM"/"Zoom" para la clase en vivo.
+function tipoSesion(cAmbiente) {
+  return (cAmbiente || '').toLowerCase().includes('asesor') ? 'Asesoría' : 'EN VIVO';
+}
+
+// El horario se consulta en vivo desde el campus virtual (ya no vive en
+// Workers KV): así el recordatorio se adapta solo a cualquier ciclo nuevo,
+// y las excepciones del calendario quedan resueltas por el propio campus.
 async function obtenerHorario(env) {
-  return (await env.HORARIO_KV.get('horario', 'json')) || {};
+  const cookie = await loginCampus(env);
+  const sesiones = await getHorarioDetallado(cookie);
+  const horario = {};
+  for (const s of sesiones) {
+    const fechaISO = fechaISODesdeCampus(s.cFecha);
+    (horario[fechaISO] ||= []).push({
+      inicio: s.cHoraInicio,
+      fin: s.cHoraFin,
+      curso: s.cAsignatura,
+      tipo: tipoSesion(s.cAmbiente),
+    });
+  }
+  return horario;
 }
 
 function sesionesDelDia(horario, fechaISO) {
@@ -41,7 +66,14 @@ function hayEnVivo(sesiones) {
 }
 
 async function enviarRecordatorio(env, fechaISO, prefijo, opciones = {}) {
-  const horario = await obtenerHorario(env);
+  let horario;
+  try {
+    horario = await obtenerHorario(env);
+  } catch (error) {
+    console.error('Error obteniendo el horario del campus', error);
+    return { enviado: false, motivo: 'error_campus', error: String(error), fecha: fechaISO };
+  }
+
   const sesiones = sesionesDelDia(horario, fechaISO);
   if (sesiones.length === 0) {
     return { enviado: false, motivo: 'sin_clases', fecha: fechaISO };
