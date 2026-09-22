@@ -138,8 +138,11 @@ async function enviarMenuHorario(env, para) {
             title: 'Horario',
             rows: [
               { id: 'menu_horario_hoy', title: 'Hoy' },
+              { id: 'menu_horario_manana', title: 'Mañana' },
               { id: 'menu_horario_semana', title: 'Esta semana' },
+              { id: 'menu_horario_semana_sig', title: 'Siguiente semana' },
               { id: 'menu_horario_mes', title: 'Este mes' },
+              { id: 'menu_horario_mes_sig', title: 'Siguiente mes' },
             ],
           },
         ],
@@ -162,18 +165,11 @@ async function sesionesAgrupadasEnRango(cookie, desdeUTC, hastaUTC) {
   return porFecha;
 }
 
-async function manejarHorarioSemana(cookie) {
-  const hoyISO = fechaISOLima();
-  const [anioH, mesH, diaH] = hoyISO.split('-').map(Number);
-  const hoyUTC = Date.UTC(anioH, mesH - 1, diaH);
-  const diaSemanaHoy = new Date(hoyUTC).getUTCDay(); // 0 = domingo
-  const offsetLunes = diaSemanaHoy === 0 ? -6 : 1 - diaSemanaHoy;
-  const lunesUTC = hoyUTC + offsetLunes * 86400000;
-  const domingoUTC = lunesUTC + 6 * 86400000;
-
-  const porFecha = await sesionesAgrupadasEnRango(cookie, lunesUTC, domingoUTC);
+// Formato "detallado": un bloque por fecha, con hora, curso y tipo. Se usa
+// para rangos cortos (un día o una semana).
+function formatearBloques(porFecha, encabezado, textoVacio) {
   const fechasOrdenadas = Object.keys(porFecha).sort();
-  if (fechasOrdenadas.length === 0) return '📅 No tienes sesiones esta semana.';
+  if (fechasOrdenadas.length === 0) return textoVacio;
 
   const bloques = fechasOrdenadas.map((fechaISO) => {
     const [a, m, d] = fechaISO.split('-').map(Number);
@@ -184,18 +180,14 @@ async function manejarHorarioSemana(cookie) {
     return `*${diaSemana} ${d}*\n${lineas.join('\n')}`;
   });
 
-  return `📅 Horario de esta semana:\n\n${bloques.join('\n\n')}`;
+  return `${encabezado}\n\n${bloques.join('\n\n')}`;
 }
 
-async function manejarHorarioMes(cookie) {
-  const hoyISO = fechaISOLima();
-  const [anioH, mesH, diaH] = hoyISO.split('-').map(Number);
-  const desdeUTC = Date.UTC(anioH, mesH - 1, 1);
-  const hastaUTC = Date.UTC(anioH, mesH, 0); // último día del mes
-
-  const porFecha = await sesionesAgrupadasEnRango(cookie, desdeUTC, hastaUTC);
+// Formato "compacto": una línea por fecha. Se usa para rangos largos (un
+// mes) para no acercarse al límite de 4096 caracteres de WhatsApp.
+function formatearLineas(porFecha, encabezado, textoVacio) {
   const fechasOrdenadas = Object.keys(porFecha).sort();
-  if (fechasOrdenadas.length === 0) return `📅 No tienes sesiones en ${MESES[mesH - 1]}.`;
+  if (fechasOrdenadas.length === 0) return textoVacio;
 
   const lineas = fechasOrdenadas.map((fechaISO) => {
     const [a, m, d] = fechaISO.split('-').map(Number);
@@ -207,11 +199,61 @@ async function manejarHorarioMes(cookie) {
     return `${diaSemana} ${d}: ${sesionesDia}`;
   });
 
-  let texto = `📅 Horario de ${MESES[mesH - 1]}:\n\n${lineas.join('\n')}`;
+  let texto = `${encabezado}\n\n${lineas.join('\n')}`;
   if (texto.length > 3800) {
-    texto = `${texto.slice(0, 3750)}\n…(recortado, hay más sesiones este mes)`;
+    texto = `${texto.slice(0, 3750)}\n…(recortado, hay más sesiones)`;
   }
   return texto;
+}
+
+function hoyUTCLima() {
+  const [anio, mes, dia] = fechaISOLima().split('-').map(Number);
+  return Date.UTC(anio, mes - 1, dia);
+}
+
+// Lunes de la semana que contiene fechaUTC (0 = domingo en getUTCDay).
+function lunesDeSemana(fechaUTC) {
+  const diaSemana = new Date(fechaUTC).getUTCDay();
+  const offset = diaSemana === 0 ? -6 : 1 - diaSemana;
+  return fechaUTC + offset * 86400000;
+}
+
+async function manejarHorarioManana(cookie) {
+  const mananaUTC = hoyUTCLima() + 86400000;
+  const porFecha = await sesionesAgrupadasEnRango(cookie, mananaUTC, mananaUTC);
+  return formatearBloques(porFecha, '📅 Horario de mañana:', '📅 No tienes sesiones mañana.');
+}
+
+async function manejarHorarioSemana(cookie) {
+  const lunesUTC = lunesDeSemana(hoyUTCLima());
+  const domingoUTC = lunesUTC + 6 * 86400000;
+  const porFecha = await sesionesAgrupadasEnRango(cookie, lunesUTC, domingoUTC);
+  return formatearBloques(porFecha, '📅 Horario de esta semana:', '📅 No tienes sesiones esta semana.');
+}
+
+async function manejarHorarioSemanaSiguiente(cookie) {
+  const lunesUTC = lunesDeSemana(hoyUTCLima()) + 7 * 86400000;
+  const domingoUTC = lunesUTC + 6 * 86400000;
+  const porFecha = await sesionesAgrupadasEnRango(cookie, lunesUTC, domingoUTC);
+  return formatearBloques(porFecha, '📅 Horario de la siguiente semana:', '📅 No tienes sesiones la siguiente semana.');
+}
+
+async function manejarHorarioMes(cookie) {
+  const [anioH, mesH] = fechaISOLima().split('-').map(Number);
+  const desdeUTC = Date.UTC(anioH, mesH - 1, 1);
+  const hastaUTC = Date.UTC(anioH, mesH, 0); // último día del mes
+  const porFecha = await sesionesAgrupadasEnRango(cookie, desdeUTC, hastaUTC);
+  return formatearLineas(porFecha, `📅 Horario de ${MESES[mesH - 1]}:`, `📅 No tienes sesiones en ${MESES[mesH - 1]}.`);
+}
+
+async function manejarHorarioMesSiguiente(cookie) {
+  const [anioH, mesH] = fechaISOLima().split('-').map(Number);
+  const mesSig = mesH === 12 ? 1 : mesH + 1;
+  const anioSig = mesH === 12 ? anioH + 1 : anioH;
+  const desdeUTC = Date.UTC(anioSig, mesSig - 1, 1);
+  const hastaUTC = Date.UTC(anioSig, mesSig, 0);
+  const porFecha = await sesionesAgrupadasEnRango(cookie, desdeUTC, hastaUTC);
+  return formatearLineas(porFecha, `📅 Horario de ${MESES[mesSig - 1]}:`, `📅 No tienes sesiones en ${MESES[mesSig - 1]}.`);
 }
 
 async function manejarCursos(cookie) {
@@ -362,8 +404,11 @@ async function manejarAnuncios(cookie) {
 
 const HANDLERS_MENU = {
   menu_horario_hoy: manejarHorarioHoy,
+  menu_horario_manana: manejarHorarioManana,
   menu_horario_semana: manejarHorarioSemana,
+  menu_horario_semana_sig: manejarHorarioSemanaSiguiente,
   menu_horario_mes: manejarHorarioMes,
+  menu_horario_mes_sig: manejarHorarioMesSiguiente,
   menu_proxima_clase: manejarProximaClase,
   menu_cursos: manejarCursos,
   menu_notas: manejarNotas,
