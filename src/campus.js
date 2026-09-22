@@ -131,6 +131,27 @@ export async function getDetalleSesionesCurso(cookie, nGruCodigo) {
   return { sesiones, recursos, sesionActiva: datos.nSesionActiva };
 }
 
+// cPerCodigo identifica al alumno internamente (distinto del código
+// universitario visible en pantalla) y no viene en ningún endpoint ya
+// usado, así que se recibe como parámetro (viene de un secret).
+export async function getGrabaciones(cookie, cPerCodigo) {
+  const curriculas = await llamarMetodo(cookie, '/Campus/Default.aspx/getCurriculaAlumno', {});
+  const curricula = curriculas.find((c) => c.nTipCur === 1) || curriculas[0];
+  const periodos = JSON.parse(curricula.arrayPeriodo);
+  const datos = await llamarMetodo(cookie, '/CampusVirtual/SesionesOnline/Sesiones.aspx/obtenerCursosSesionesOnline', {
+    nCurCodigo: curricula.nCurCodigo,
+    cPerCodigo,
+    nPrdCodigo: periodos[0].nPrdCodigo,
+  });
+  return datos
+    .map((s) => ({
+      asignatura: s.Asignatura,
+      fecha: s.fechaInicioReunion,
+      grabaciones: JSON.parse(s.grabaciones || '[]').map((g) => g.play_url),
+    }))
+    .filter((s) => s.grabaciones.length > 0);
+}
+
 export async function getHorarioDetallado(cookie) {
   const datos = await llamarMetodo(
     cookie,

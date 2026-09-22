@@ -7,6 +7,7 @@ import {
   getRegistroActual,
   getAvanceCarrera,
   getDetalleSesionesCurso,
+  getGrabaciones,
 } from './campus.js';
 
 const GRAPH_BASE = 'https://graph.facebook.com/v25.0';
@@ -49,6 +50,7 @@ export async function enviarMenu(env, para) {
               { id: 'menu_ver_curso', title: 'Ver un curso' },
               { id: 'menu_notas', title: 'Mis notas / avance' },
               { id: 'menu_pagos', title: 'Pagos pendientes' },
+              { id: 'menu_grabaciones', title: 'Grabaciones recientes' },
             ],
           },
           {
@@ -153,12 +155,31 @@ async function manejarPagos(cookie) {
   return `💰 Pagos pendientes:\n\n${lineas.join('\n')}`;
 }
 
+// "DD/MM/YYYY HH:MM" -> timestamp ordenable
+function fechaSesionATimestamp(fecha) {
+  const [diaMes, hora] = fecha.split(' ');
+  const [dia, mes, anio] = diaMes.split('/').map(Number);
+  const [h, m] = (hora || '00:00').split(':').map(Number);
+  return new Date(anio, mes - 1, dia, h, m).getTime();
+}
+
+async function manejarGrabaciones(cookie, env) {
+  const sesiones = await getGrabaciones(cookie, env.CAMPUS_PER_CODIGO);
+  const recientes = sesiones.sort((a, b) => fechaSesionATimestamp(b.fecha) - fechaSesionATimestamp(a.fecha)).slice(0, 5);
+  if (recientes.length === 0) return 'No encontré grabaciones disponibles todavía.';
+  const lineas = recientes.map(
+    (s) => `• ${s.asignatura} — ${s.fecha}\n  ${s.grabaciones.join('\n  ')}`
+  );
+  return `🎥 Últimas grabaciones:\n\n${lineas.join('\n\n')}`;
+}
+
 const HANDLERS_MENU = {
   menu_horario_hoy: manejarHorarioHoy,
   menu_proxima_clase: manejarProximaClase,
   menu_cursos: manejarCursos,
   menu_notas: manejarNotas,
   menu_pagos: manejarPagos,
+  menu_grabaciones: manejarGrabaciones,
 };
 
 export async function manejarOpcionMenu(env, para, idOpcion) {
@@ -198,7 +219,7 @@ export async function manejarOpcionMenu(env, para, idOpcion) {
   }
   try {
     const cookie = await loginCampus(env);
-    const texto = await handler(cookie);
+    const texto = await handler(cookie, env);
     await enviarTexto(env, para, texto);
   } catch (error) {
     console.error('Error consultando el campus', error);
@@ -246,9 +267,19 @@ const HERRAMIENTAS = [
       required: ['curso'],
     },
   },
+  {
+    name: 'get_grabaciones',
+    description: 'Devuelve las grabaciones de Zoom de las sesiones pasadas, con enlace directo. Se puede filtrar por curso.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        curso: { type: 'string', description: 'Nombre o parte del nombre del curso, ej. "Inglés". Si se omite, devuelve de todos los cursos.' },
+      },
+    },
+  },
 ];
 
-async function ejecutarHerramienta(cookie, nombre, input) {
+async function ejecutarHerramienta(cookie, env, nombre, input) {
   switch (nombre) {
     case 'get_horario_detallado':
       return getHorarioDetallado(cookie);
@@ -268,6 +299,11 @@ async function ejecutarHerramienta(cookie, nombre, input) {
       if (!curso) return { error: `No encontré ningún curso que coincida con "${input?.curso}"` };
       const detalle = await getDetalleSesionesCurso(cookie, curso.nGruCodigo);
       return { curso: curso.asignatura, silabo: curso.silabo, ...detalle };
+    }
+    case 'get_grabaciones': {
+      const sesiones = await getGrabaciones(cookie, env.CAMPUS_PER_CODIGO);
+      if (!input?.curso) return sesiones;
+      return sesiones.filter((s) => s.asignatura.toUpperCase().includes(input.curso.toUpperCase()));
     }
     default:
       throw new Error(`Herramienta desconocida: ${nombre}`);
@@ -326,7 +362,7 @@ export async function responderPreguntaLibre(env, para, pregunta) {
     const resultados = await Promise.all(
       bloquesHerramienta.map(async (bloque) => {
         try {
-          const resultado = await ejecutarHerramienta(cookie, bloque.name, bloque.input);
+          const resultado = await ejecutarHerramienta(cookie, env, bloque.name, bloque.input);
           return { type: 'tool_result', tool_use_id: bloque.id, content: JSON.stringify(resultado) };
         } catch (error) {
           return { type: 'tool_result', tool_use_id: bloque.id, content: String(error), is_error: true };
