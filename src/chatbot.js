@@ -122,8 +122,14 @@ async function enviarListaSesiones(env, para, cookie, nGruCodigo) {
   const curso = cursos.find((c) => String(c.nGruCodigo) === String(nGruCodigo));
   const numActiva = detalle.sesiones.find((s) => s.activa)?.sesion ?? detalle.sesiones[detalle.sesiones.length - 1]?.sesion;
 
-  // Orden descendente (más reciente primero); WhatsApp permite máx. 10 filas.
-  const sesionesOrdenadas = [...detalle.sesiones].sort((a, b) => b.sesion - a.sesion).slice(0, 10);
+  // Orden descendente (más reciente primero); WhatsApp permite máx. 10 filas,
+  // así que se centra la ventana en la sesión activa en vez de tomar
+  // siempre las 10 con número más alto (que podrían ser puro futuro).
+  const todasDescendente = [...detalle.sesiones].sort((a, b) => b.sesion - a.sesion);
+  const idxActiva = Math.max(0, todasDescendente.findIndex((s) => s.sesion === numActiva));
+  let inicio = Math.max(0, idxActiva - 2);
+  if (inicio + 10 > todasDescendente.length) inicio = Math.max(0, todasDescendente.length - 10);
+  const sesionesOrdenadas = todasDescendente.slice(inicio, inicio + 10);
 
   await enviarWhatsApp(env, {
     to: para,
