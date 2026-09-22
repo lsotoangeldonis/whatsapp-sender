@@ -11,6 +11,7 @@ import {
   getMuro,
 } from './campus.js';
 import { obtenerPreferenciasAlertas, guardarPreferenciasAlertas } from './preferencias.js';
+import { fechaISOLima, fechaISODesdeCampus, tipoSesion, DIAS_SEMANA, MESES } from './fechas.js';
 
 const GRAPH_BASE = 'https://graph.facebook.com/v25.0';
 
@@ -46,7 +47,7 @@ export async function enviarMenu(env, para) {
           {
             title: 'Consultas rápidas',
             rows: [
-              { id: 'menu_horario_hoy', title: 'Horario de hoy' },
+              { id: 'menu_horario', title: '📅 Horario' },
               { id: 'menu_proxima_clase', title: 'Próxima clase (Zoom)' },
               { id: 'menu_cursos', title: 'Mis cursos' },
               { id: 'menu_ver_curso', title: 'Ver un curso' },
@@ -120,6 +121,97 @@ async function manejarProximaClase(cookie) {
   const proxima = datos.sesionesHoy[0] || datos.sesionesProximas[0];
   if (!proxima) return 'No encontré ninguna sesión programada próximamente.';
   return `⏰ Tu próxima clase:\n\n${proxima.asignatura}\n${proxima.fecha}\n\n🔗 ${proxima.enlace}`;
+}
+
+async function enviarMenuHorario(env, para) {
+  await enviarWhatsApp(env, {
+    to: para,
+    type: 'interactive',
+    interactive: {
+      type: 'list',
+      header: { type: 'text', text: 'Horario' },
+      body: { text: 'Elige qué horario quieres ver.' },
+      action: {
+        button: 'Ver horario',
+        sections: [
+          {
+            title: 'Horario',
+            rows: [
+              { id: 'menu_horario_hoy', title: 'Hoy' },
+              { id: 'menu_horario_semana', title: 'Esta semana' },
+              { id: 'menu_horario_mes', title: 'Este mes' },
+            ],
+          },
+        ],
+      },
+    },
+  });
+}
+
+// Agrupa HORARIO_DETALLADO por fecha ISO dentro de un rango [desdeUTC, hastaUTC].
+async function sesionesAgrupadasEnRango(cookie, desdeUTC, hastaUTC) {
+  const sesiones = await getHorarioDetallado(cookie);
+  const porFecha = {};
+  for (const s of sesiones) {
+    const fechaISO = fechaISODesdeCampus(s.cFecha);
+    const [a, m, d] = fechaISO.split('-').map(Number);
+    const ts = Date.UTC(a, m - 1, d);
+    if (ts < desdeUTC || ts > hastaUTC) continue;
+    (porFecha[fechaISO] ||= []).push(s);
+  }
+  return porFecha;
+}
+
+async function manejarHorarioSemana(cookie) {
+  const hoyISO = fechaISOLima();
+  const [anioH, mesH, diaH] = hoyISO.split('-').map(Number);
+  const hoyUTC = Date.UTC(anioH, mesH - 1, diaH);
+  const diaSemanaHoy = new Date(hoyUTC).getUTCDay(); // 0 = domingo
+  const offsetLunes = diaSemanaHoy === 0 ? -6 : 1 - diaSemanaHoy;
+  const lunesUTC = hoyUTC + offsetLunes * 86400000;
+  const domingoUTC = lunesUTC + 6 * 86400000;
+
+  const porFecha = await sesionesAgrupadasEnRango(cookie, lunesUTC, domingoUTC);
+  const fechasOrdenadas = Object.keys(porFecha).sort();
+  if (fechasOrdenadas.length === 0) return '📅 No tienes sesiones esta semana.';
+
+  const bloques = fechasOrdenadas.map((fechaISO) => {
+    const [a, m, d] = fechaISO.split('-').map(Number);
+    const diaSemana = DIAS_SEMANA[new Date(Date.UTC(a, m - 1, d)).getUTCDay()];
+    const lineas = porFecha[fechaISO]
+      .sort((x, y) => x.cHoraInicio.localeCompare(y.cHoraInicio))
+      .map((s) => `  ${s.cHoraInicio}–${s.cHoraFin} ${s.cAsignatura} (${tipoSesion(s.cAmbiente)})`);
+    return `*${diaSemana} ${d}*\n${lineas.join('\n')}`;
+  });
+
+  return `📅 Horario de esta semana:\n\n${bloques.join('\n\n')}`;
+}
+
+async function manejarHorarioMes(cookie) {
+  const hoyISO = fechaISOLima();
+  const [anioH, mesH, diaH] = hoyISO.split('-').map(Number);
+  const desdeUTC = Date.UTC(anioH, mesH - 1, 1);
+  const hastaUTC = Date.UTC(anioH, mesH, 0); // último día del mes
+
+  const porFecha = await sesionesAgrupadasEnRango(cookie, desdeUTC, hastaUTC);
+  const fechasOrdenadas = Object.keys(porFecha).sort();
+  if (fechasOrdenadas.length === 0) return `📅 No tienes sesiones en ${MESES[mesH - 1]}.`;
+
+  const lineas = fechasOrdenadas.map((fechaISO) => {
+    const [a, m, d] = fechaISO.split('-').map(Number);
+    const diaSemana = DIAS_SEMANA[new Date(Date.UTC(a, m - 1, d)).getUTCDay()].slice(0, 3);
+    const sesionesDia = porFecha[fechaISO]
+      .sort((x, y) => x.cHoraInicio.localeCompare(y.cHoraInicio))
+      .map((s) => `${s.cHoraInicio}–${s.cHoraFin} ${s.cAsignatura}`)
+      .join(' · ');
+    return `${diaSemana} ${d}: ${sesionesDia}`;
+  });
+
+  let texto = `📅 Horario de ${MESES[mesH - 1]}:\n\n${lineas.join('\n')}`;
+  if (texto.length > 3800) {
+    texto = `${texto.slice(0, 3750)}\n…(recortado, hay más sesiones este mes)`;
+  }
+  return texto;
 }
 
 async function manejarCursos(cookie) {
@@ -270,6 +362,8 @@ async function manejarAnuncios(cookie) {
 
 const HANDLERS_MENU = {
   menu_horario_hoy: manejarHorarioHoy,
+  menu_horario_semana: manejarHorarioSemana,
+  menu_horario_mes: manejarHorarioMes,
   menu_proxima_clase: manejarProximaClase,
   menu_cursos: manejarCursos,
   menu_notas: manejarNotas,
@@ -290,6 +384,16 @@ export async function manejarOpcionMenu(env, para, idOpcion) {
     } catch (error) {
       console.error('Error mostrando configuración de alertas', error);
       await enviarTexto(env, para, '⚠️ No pude cargar tu configuración de alertas ahora mismo.');
+    }
+    return;
+  }
+
+  if (idOpcion === 'menu_horario') {
+    try {
+      await enviarMenuHorario(env, para);
+    } catch (error) {
+      console.error('Error mostrando el submenú de horario', error);
+      await enviarTexto(env, para, '⚠️ No pude cargar el menú de horario ahora mismo.');
     }
     return;
   }
