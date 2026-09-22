@@ -24,6 +24,10 @@ jobs:
             TEST_TOKEN
             WHATSAPP_TEMPLATE_NAME
             WHATSAPP_TEMPLATE_LANG
+            ANTHROPIC_API_KEY
+            CAMPUS_USUARIO
+            CAMPUS_PASSWORD
+            WEBHOOK_VERIFY_TOKEN
         env:
           WHATSAPP_TOKEN: ${{ secrets.WHATSAPP_TOKEN }}
           PHONE_NUMBER_ID: ${{ secrets.PHONE_NUMBER_ID }}
@@ -31,3 +35,7 @@ jobs:
           TEST_TOKEN: ${{ secrets.TEST_TOKEN }}
           WHATSAPP_TEMPLATE_NAME: ${{ secrets.WHATSAPP_TEMPLATE_NAME }}
           WHATSAPP_TEMPLATE_LANG: ${{ secrets.WHATSAPP_TEMPLATE_LANG }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CAMPUS_USUARIO: ${{ secrets.CAMPUS_USUARIO }}
+          CAMPUS_PASSWORD: ${{ secrets.CAMPUS_PASSWORD }}
+          WEBHOOK_VERIFY_TOKEN: ${{ secrets.WEBHOOK_VERIFY_TOKEN }}

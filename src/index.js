@@ -1,3 +1,5 @@
+import { enviarMenu, manejarOpcionMenu, responderPreguntaLibre } from './chatbot.js';
+
 const MESES = [
   'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
   'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre',
@@ -108,6 +110,27 @@ async function enviarRecordatorio(env, fechaISO, prefijo, opciones = {}) {
 const CRON_RESUMEN_HOY = '0 12 * * *'; // 07:00 Lima
 const CRON_AVISO_MANANA = '0 2 * * *'; // 21:00 Lima (día siguiente en UTC)
 
+// Palabras que muestran el menú interactivo en vez de ir directo a Claude
+const PALABRAS_MENU = new Set(['menu', 'menú', 'hola', 'inicio', 'ayuda']);
+
+async function manejarMensajeEntrante(env, mensaje) {
+  const para = mensaje.from;
+
+  if (mensaje.type === 'interactive' && mensaje.interactive?.type === 'list_reply') {
+    await manejarOpcionMenu(env, para, mensaje.interactive.list_reply.id);
+    return;
+  }
+
+  if (mensaje.type === 'text') {
+    const texto = (mensaje.text?.body || '').trim().toLowerCase();
+    if (PALABRAS_MENU.has(texto)) {
+      await enviarMenu(env, para);
+      return;
+    }
+    await responderPreguntaLibre(env, para, mensaje.text.body);
+  }
+}
+
 export default {
   async scheduled(event, env, ctx) {
     if (event.cron === CRON_RESUMEN_HOY) {
@@ -117,8 +140,31 @@ export default {
     }
   },
 
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
+
+    if (url.pathname === '/webhook') {
+      if (request.method === 'GET') {
+        const modo = url.searchParams.get('hub.mode');
+        const token = url.searchParams.get('hub.verify_token');
+        const challenge = url.searchParams.get('hub.challenge');
+        if (modo === 'subscribe' && token === env.WEBHOOK_VERIFY_TOKEN) {
+          return new Response(challenge, { status: 200 });
+        }
+        return new Response('Forbidden', { status: 403 });
+      }
+
+      if (request.method === 'POST') {
+        const cuerpo = await request.json();
+        const mensaje = cuerpo.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
+        if (mensaje) {
+          ctx.waitUntil(manejarMensajeEntrante(env, mensaje));
+        }
+        return new Response('OK', { status: 200 });
+      }
+
+      return new Response('Method not allowed', { status: 405 });
+    }
 
     if (url.pathname !== '/test') {
       return new Response('Not found', { status: 404 });

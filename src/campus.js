@@ -77,8 +77,27 @@ async function llamarMetodo(cookie, ruta, payload = {}) {
   return JSON.parse(datos.d);
 }
 
+function quitarHtml(texto = '') {
+  return texto.replace(/<[^>]+>/g, '').trim();
+}
+
+// El endpoint real trae descripciones enormes en HTML (metodologia, logro,
+// informacionAsignatura) que no aportan nada util al chatbot y solo suman
+// tokens. Se devuelve una version resumida con lo que realmente se consulta.
 export async function getCursosActuales(cookie) {
-  return llamarMetodo(cookie, '/Campus/Default.aspx/Alu_ObtenerCursosActuales', {});
+  const cursos = await llamarMetodo(cookie, '/Campus/Default.aspx/Alu_ObtenerCursosActuales', {});
+  return cursos.map((c) => ({
+    asignatura: c.asignatura,
+    docente: [c.docenteNombre, c.docenteApellido].filter(Boolean).join(' '),
+    correoDocente: c.correoDocente || null,
+    horario: (c.arrayHorarioDesignv2 || []).map((h) => quitarHtml(h.properties?.html)).join(' · '),
+    fechaInicioCurso: c.fechaInicioCurso,
+    fechaFinCurso: c.fechaFinCurso,
+    estado: quitarHtml(c.cValidacionFechas),
+    creditos: c.creditos,
+    modalidad: c.modalidad,
+    silabo: c.cSilabo ? `https://virtual.autonoma.edu.pe${c.cSilabo}` : null,
+  }));
 }
 
 export async function getHorarioDetallado(cookie) {
@@ -90,8 +109,21 @@ export async function getHorarioDetallado(cookie) {
   return datos.HORARIO_DETALLADO || [];
 }
 
+function resumirSesion(s) {
+  return {
+    asignatura: s.Asignatura,
+    fecha: s.fechaInicioReunion,
+    enlace: s.start_url,
+  };
+}
+
 export async function getProximasSesiones(cookie) {
-  return llamarMetodo(cookie, '/Campus/Default.aspx/obtenerSesionesVirtualesHoyProxima', {});
+  const datos = await llamarMetodo(cookie, '/Campus/Default.aspx/obtenerSesionesVirtualesHoyProxima', {});
+  return {
+    hoy: datos.hoy,
+    sesionesHoy: (datos.sesionesHoy || []).map(resumirSesion),
+    sesionesProximas: (datos.sesioneProx || []).map(resumirSesion),
+  };
 }
 
 export async function getPagosPendientes(cookie) {
@@ -112,8 +144,19 @@ export async function getAvanceCarrera(cookie, nPerAluRegCodigo) {
     cTablas: 'Malla_Curricular,Malla_Curricular_grafAvanceCarrera',
     nPerAluRegCodigo,
   });
-  return {
-    cursos: datos.Malla_Curricular || [],
-    avance: datos.grafAvanceCarrera?.[0] || null,
-  };
+  const cursos = (datos.Malla_Curricular || []).map((c) => ({
+    asignatura: c.cAsignatura,
+    ciclo: c.cCiclo,
+    estado: c.Estado,
+    nota: c.Nota || null,
+    periodo: c.Periodo || null,
+    creditos: c.nNroCredito,
+  }));
+  const avance = datos.grafAvanceCarrera?.[0]
+    ? {
+        creditosAprobados: datos.grafAvanceCarrera[0].totalCreditosAprobados,
+        creditosTotales: datos.grafAvanceCarrera[0].totalCreditos,
+      }
+    : null;
+  return { cursos, avance };
 }
