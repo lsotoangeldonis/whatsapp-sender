@@ -170,10 +170,11 @@ export default {
       if (!env.TEST_TOKEN || url.searchParams.get('token') !== env.TEST_TOKEN) {
         return new Response('Unauthorized', { status: 401 });
       }
-      // Suscribe explícitamente el número de teléfono a esta app: sin esto,
-      // el webhook a nivel de app puede estar bien configurado y aun así no
-      // recibir mensajes reales de este número.
-      const respuesta = await fetch(`https://graph.facebook.com/v25.0/${env.PHONE_NUMBER_ID}/subscribed_apps`, {
+      // Suscribe explícitamente la WABA a esta app: sin esto, el webhook a
+      // nivel de app puede estar bien configurado y aun así no recibir
+      // mensajes reales. Va contra el WABA ID, no el phone_number_id.
+      const wabaId = url.searchParams.get('waba_id') || env.PHONE_NUMBER_ID;
+      const respuesta = await fetch(`https://graph.facebook.com/v25.0/${wabaId}/subscribed_apps`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${env.WHATSAPP_TOKEN}` },
       });
