@@ -100,7 +100,7 @@ async function enviarListaCursos(env, para, cookie) {
     interactive: {
       type: 'list',
       header: { type: 'text', text: 'Tus cursos' },
-      body: { text: 'Elige un curso para ver su sílabo y el contenido de la sesión actual.' },
+      body: { text: 'Elige un curso para ver sus sesiones.' },
       action: {
         button: 'Ver cursos',
         sections: [
@@ -117,20 +117,50 @@ async function enviarListaCursos(env, para, cookie) {
   });
 }
 
-async function manejarContenidoCurso(cookie, nGruCodigo) {
+async function enviarListaSesiones(env, para, cookie, nGruCodigo) {
   const [cursos, detalle] = await Promise.all([getCursosActuales(cookie), getDetalleSesionesCurso(cookie, nGruCodigo)]);
   const curso = cursos.find((c) => String(c.nGruCodigo) === String(nGruCodigo));
-  const sesionActiva = detalle.sesiones.find((s) => s.activa) || detalle.sesiones[detalle.sesiones.length - 1];
-  const recursosSesion = sesionActiva ? detalle.recursos.filter((r) => r.sesion === sesionActiva.sesion) : [];
+  const numActiva = detalle.sesiones.find((s) => s.activa)?.sesion ?? detalle.sesiones[detalle.sesiones.length - 1]?.sesion;
+
+  // Orden descendente (más reciente primero); WhatsApp permite máx. 10 filas.
+  const sesionesOrdenadas = [...detalle.sesiones].sort((a, b) => b.sesion - a.sesion).slice(0, 10);
+
+  await enviarWhatsApp(env, {
+    to: para,
+    type: 'interactive',
+    interactive: {
+      type: 'list',
+      header: { type: 'text', text: curso?.asignatura?.slice(0, 60) || 'Curso' },
+      body: { text: 'Elige una sesión para ver su contenido.' },
+      action: {
+        button: 'Ver sesiones',
+        sections: [
+          {
+            title: 'Sesiones',
+            rows: sesionesOrdenadas.map((s) => {
+              const etiqueta = s.sesion === numActiva ? ' (Actual)' : s.sesion === numActiva - 1 ? ' (Última)' : '';
+              return { id: `sesion_${nGruCodigo}_${s.sesion}`, title: `Sesión ${s.sesion}${etiqueta}` };
+            }),
+          },
+        ],
+      },
+    },
+  });
+}
+
+async function manejarContenidoSesion(cookie, nGruCodigo, numeroSesion) {
+  const [cursos, detalle] = await Promise.all([getCursosActuales(cookie), getDetalleSesionesCurso(cookie, nGruCodigo)]);
+  const curso = cursos.find((c) => String(c.nGruCodigo) === String(nGruCodigo));
+  const sesion = detalle.sesiones.find((s) => String(s.sesion) === String(numeroSesion));
+  if (!sesion) return 'No encontré esa sesión.';
+  const recursosSesion = detalle.recursos.filter((r) => String(r.sesion) === String(numeroSesion));
   const lineasRecursos = recursosSesion.map((r) =>
     r.tipo === 'Enlace' ? `• ${r.titulo}: ${r.url}` : `• ${r.titulo} (archivo — disponible en el campus virtual, sección Recursos)`
   );
 
   const partes = [`📘 ${curso?.asignatura || 'Curso'}`];
   if (curso?.silabo) partes.push(`📄 Sílabo: ${curso.silabo}`);
-  if (sesionActiva) {
-    partes.push(`\n🗓️ Sesión ${sesionActiva.sesion} (${sesionActiva.semanaInicio}–${sesionActiva.semanaFin}):\n${sesionActiva.tema}`);
-  }
+  partes.push(`\n🗓️ Sesión ${sesion.sesion} (${sesion.semanaInicio}–${sesion.semanaFin}):\n${sesion.tema}`);
   if (lineasRecursos.length > 0) {
     partes.push(`\n📎 Recursos de esta sesión:\n${lineasRecursos.join('\n')}`);
   }
@@ -203,11 +233,23 @@ export async function manejarOpcionMenu(env, para, idOpcion) {
     const nGruCodigo = idOpcion.slice('curso_'.length);
     try {
       const cookie = await loginCampus(env);
-      const texto = await manejarContenidoCurso(cookie, nGruCodigo);
+      await enviarListaSesiones(env, para, cookie, nGruCodigo);
+    } catch (error) {
+      console.error('Error listando sesiones del curso', error);
+      await enviarTexto(env, para, '⚠️ No pude consultar ese curso ahora mismo. Intenta de nuevo en un momento.');
+    }
+    return;
+  }
+
+  if (idOpcion.startsWith('sesion_')) {
+    const [, nGruCodigo, numeroSesion] = idOpcion.split('_');
+    try {
+      const cookie = await loginCampus(env);
+      const texto = await manejarContenidoSesion(cookie, nGruCodigo, numeroSesion);
       await enviarTexto(env, para, texto);
     } catch (error) {
-      console.error('Error consultando contenido del curso', error);
-      await enviarTexto(env, para, '⚠️ No pude consultar el contenido de ese curso ahora mismo. Intenta de nuevo en un momento.');
+      console.error('Error consultando contenido de la sesión', error);
+      await enviarTexto(env, para, '⚠️ No pude consultar esa sesión ahora mismo. Intenta de nuevo en un momento.');
     }
     return;
   }
