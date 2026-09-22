@@ -25,16 +25,21 @@ pagos, grabaciones, anuncios, configuración de alertas) y fallback a Claude
 src/
   index.js        Entry point del Worker: scheduled() (crons) + fetch() (webhook/rutas de test)
   chatbot.js       Menú de WhatsApp, handlers de cada opción, y el loop de Claude para preguntas libres
-  campus.js        Cliente del campus virtual: login + PageMethods reverse-engineered
+  campus.js        Cliente del campus virtual: login + caché de sesión + PageMethods
   preferencias.js  Preferencias de alertas (on/off), persistidas en Workers KV
   fechas.js        Helpers de fecha/hora compartidos (todo en hora Lima, UTC-5 fijo)
 ```
 
-No hay base de datos ni backend propio: Workers KV se usa únicamente para
-(a) las preferencias de alertas y (b) claves de deduplicación de la alerta
-de "próxima clase". El horario, los cursos, notas, pagos, grabaciones y
-anuncios se consultan **en vivo** contra el campus virtual en cada request —
-nada de eso se cachea ni se guarda en el repo (es información personal).
+No hay base de datos ni backend propio. Workers KV guarda solo estado
+efímero o reconstruible: las preferencias de alertas, el dedupe de la
+alerta de próxima clase, y dos cachés con TTL (el horario y la cookie de
+sesión del campus) que existen para no martillar el campus con logins —
+ver "Volumen de logins al campus".
+
+Los datos siguen viniendo **del campus en vivo**: cursos, notas, pagos,
+grabaciones y anuncios se consultan en cada request, y el horario se
+refresca solo dos veces al día. Nada de eso se guarda en el repo (es
+información personal) ni hay que sembrarlo a mano al cambiar de ciclo.
 
 ## Cron Triggers
 
@@ -183,38 +188,51 @@ explícitamente a Claude a usar `*negrita con un solo asterisco*` (no
 simples — esto costó un bug real (Claude usaba `**` por default) antes de
 agregar la instrucción.
 
-## Optimización del volumen de logins
+## Volumen de logins al campus
 
-Estado actual: `loginCampus()` corre en cada invocación que toca el campus.
-Con la alerta de próxima clase activa eso son ~96 logins/día del cron de 15
-minutos, más uno por cada opción de menú (y una navegación
-curso → sesiones → contenido son 3 logins seguidos).
+Antes, `loginCampus()` corría en cada invocación que tocaba el campus: con
+la alerta de próxima clase activa eran ~96 logins/día solo del cron de 15
+minutos, más uno por cada opción de menú. No es un riesgo de seguridad,
+pero un campus con detección de logins repetidos puede bloquear la cuenta
+sin aviso. Hay dos cachés en KV que lo bajan a menos de 10/día:
 
-Dos palancas, en orden de impacto:
+**1. Caché del horario (`horario_cache`, TTL 26 h).** El cron de 15 min solo
+necesita saber si alguna clase empieza pronto, y el calendario cambia como
+mucho una vez al día. `obtenerHorarioCacheado()` lo lee de KV y hace **cero
+logins**; `obtenerHorarioFresco()` consulta el campus y reescribe el caché,
+y lo usan los recordatorios de 07:00 y 21:00 (que ya hacían login igual) y
+`/test`. Resultado: el cron pasa de ~96 logins/día a 0, y el refresco queda
+en ~2/día.
 
-**1. Cachear el horario en KV (mata el ~95% del volumen).** El cron de 15
-min hoy hace login + `getHorarioDetallado` solo para preguntar "¿empieza
-alguna clase en los próximos 15 minutos?". Ese calendario cambia como mucho
-una vez al día. Guardándolo en KV y refrescándolo una vez al día (por
-ejemplo en el cron de las 07:00, que ya hace login igual), el cron de 15
-min pasa a hacer una **lectura de KV** y cero logins. Los logins del cron
-bajan de ~96/día a ~2.
+Esto **no** vuelve al modelo viejo de sembrar el horario a mano: el refresco
+es automático, así que se sigue adaptando solo a un ciclo nuevo o a un
+cambio de calendario, con hasta un día de lag. Si el caché está vacío
+(primer arranque, o TTL vencido porque los cron dejaron de correr), la
+lectura cae sola a una consulta en vivo y lo repuebla. Costo en KV: ~2
+escrituras/día contra un límite de 1000, y ~96 lecturas contra 100 000.
 
-Importante: esto **no** vuelve al modelo viejo de sembrar el horario a mano.
-El refresco es automático y diario, así que se sigue adaptando solo a un
-ciclo nuevo o a un cambio de calendario — solo con hasta un día de lag, que
-para un horario de clases es irrelevante. Costo en KV: ~2 escrituras/día
-(límite 1000/día) y ~96 lecturas/día (límite 100 000/día).
+**2. Caché de la cookie de sesión (`cookie_campus`, TTL 15 min).**
+`obtenerCookie(env)` reutiliza la cookie mientras siga válida, así que una
+navegación curso → sesiones → contenido usa 1 login en vez de 3-4.
 
-**2. Cachear la cookie de sesión en KV (arregla las ráfagas del menú).** La
-cookie `.ASPXFORMSAUTH` sirve hasta que el campus la expira. Guardándola en
-KV con un TTL corto, una navegación de menú completa usa 1 login en vez de
-3-4. Requiere reintentar con login nuevo si el campus la rechaza (la sesión
-puede caducar antes del TTL), que es la parte que agrega complejidad. El
-TTL real hay que medirlo: ASP.NET Forms Auth suele usar 20-30 min
-deslizantes, pero no está confirmado en este campus.
+El TTL es conservador porque el real no está confirmado (ASP.NET Forms Auth
+suele usar 20-30 min deslizantes). Lo que hace viable el caché es el
+reintento: con la sesión vencida el campus **no devuelve un error**,
+redirige a `Login.aspx`, así que la respuesta pasa a ser HTML en vez del
+JSON del PageMethod. `llamarMetodo()` detecta eso y lanza `SesionExpirada`;
+`conSesion(env, operacion)` la captura, hace login nuevo y reintenta una
+sola vez. Solo reintenta ante ese error concreto — un 500 del campus se
+propaga tal cual, sin reintento ni login extra.
 
-Con ambas, el total baja de ~100-120 logins/día a menos de 10.
+Todas las rutas que tocan el campus pasan por `conSesion()`. En
+`responderPreguntaLibre` el reintento envuelve cada herramienta por
+separado, no la conversación completa, para no re-gastar tokens de Claude
+si la sesión expira a mitad de camino.
+
+> Nota: la cookie cacheada es una sesión viva del campus guardada en KV.
+> Quien tenga acceso a tu cuenta de Cloudflare podría leerla, pero esa
+> misma persona ya tendría acceso a `CAMPUS_PASSWORD` en los secrets del
+> Worker, así que no es una escalada real — y expira en 15 minutos.
 
 ## Endpoints del campus virtual (reverse-engineered)
 
@@ -454,9 +472,17 @@ no tiene salida de red hacia Cloudflare/Meta/el campus).
 3. Revisa el log del job: la acción `cloudflare/wrangler-action` imprime la
    URL del Worker desplegado (`https://whatsapp-sender.<tu-subdominio>.workers.dev`).
 4. **Namespace de KV** — ya está creado (`HORARIO_KV`, ver `wrangler.toml`).
-   Hoy solo guarda las preferencias de alertas (clave `alertas`) y las
-   claves de dedupe de la alerta de próxima clase (`alerta_clase:*`, TTL
-   24h) — **ya no guarda el horario** (ver "Legado" más abajo).
+   Guarda cuatro cosas, todas efímeras o reconstruibles:
+
+   | Clave | TTL | Qué es |
+   |---|---|---|
+   | `alertas` | sin TTL | Preferencias de alertas (los 4 toggles del menú) |
+   | `alerta_clase:<fecha>:<hora>:<curso>` | 24 h | Dedupe de la alerta de próxima clase |
+   | `horario_cache` | 26 h | Horario del periodo, para que el cron de 15 min no consulte el campus |
+   | `cookie_campus` | 15 min | Cookie de sesión del campus reutilizable |
+
+   La clave `horario` del diseño original (sembrada a mano) ya no se usa
+   — ver "Legado" más abajo; `horario_cache` es otra cosa: se refresca sola.
 
 ### Opción B: desde tu propia terminal
 
@@ -569,14 +595,11 @@ falta un fallback estático), pero no son parte del flujo activo.
 - **Cron Triggers de Cloudflare no son exactos al segundo** — pueden
   ejecutarse con algunos minutos de retraso; irrelevante para recordatorios
   diarios, y cubierto por la ventana de 8–22 min en la alerta de clase.
-- **Sesión del campus por request**: cada llamada a `loginCampus()` hace un
-  login completo (no hay sesión persistente entre invocaciones del Worker),
-  así que cada opción del menú y cada corrida de cron paga ese costo. Con la
-  alerta de próxima clase activada son **~96 logins/día solo del cron de 15
-  min**, más uno por cada toque de menú. No es un problema de seguridad,
-  pero si el campus tiene detección de logins repetidos es el tipo de cosa
-  que bloquea la cuenta sin aviso. Las dos palancas para bajarlo están
-  descritas en "Optimización del volumen de logins".
+- **TTL de la cookie del campus sin confirmar**: el caché de sesión usa 15
+  min por precaución, pero el valor real que usa el campus no se midió. Si
+  fuera más corto, el reintento de `conSesion()` lo absorbe (al costo de un
+  login extra); si fuera bastante más largo, se podría subir el TTL y
+  ahorrar más. Ver "Volumen de logins al campus".
 - **Recursos tipo "Archivo"** (PDF/PPT subidos al campus) no traen una URL
   absoluta confiable en la respuesta del endpoint — el bot solo avisa que
   están disponibles en el campus virtual, sin link directo.

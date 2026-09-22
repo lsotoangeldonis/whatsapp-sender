@@ -12,10 +12,55 @@ function extraerCookie(respuesta, nombre) {
   return match ? match[1] : null;
 }
 
+const CLAVE_COOKIE = 'cookie_campus';
+// Conservador: ASP.NET Forms Auth suele expirar a los 20-30 min deslizantes,
+// pero no está confirmado en este campus. Si se queda corto, conSesion
+// reintenta con un login nuevo.
+const TTL_COOKIE_SEG = 15 * 60;
+
+// Con la sesión vencida el campus no devuelve un error: redirige a
+// Login.aspx, así que la respuesta pasa a ser HTML en vez del JSON del
+// PageMethod. Se distingue del resto de fallos para poder reintentar.
+export class SesionExpirada extends Error {
+  constructor(ruta) {
+    super(`El campus no devolvió JSON en ${ruta}: sesión probablemente expirada`);
+    this.name = 'SesionExpirada';
+  }
+}
+
+async function guardarCookie(env, cookie) {
+  await env.HORARIO_KV.put(CLAVE_COOKIE, cookie, { expirationTtl: TTL_COOKIE_SEG });
+}
+
+export async function obtenerCookie(env) {
+  const cacheada = await env.HORARIO_KV.get(CLAVE_COOKIE);
+  if (cacheada) return cacheada;
+  const cookie = await loginCampus(env);
+  await guardarCookie(env, cookie);
+  return cookie;
+}
+
+// Ejecuta una operación con la cookie cacheada y, si el campus la rechaza,
+// hace login nuevo y reintenta una vez. El reintento es lo que hace viable
+// el caché: sin él, una cookie vencida antes del TTL le devolvería un error
+// al usuario en vez de sus datos. Solo reintenta ante SesionExpirada, que
+// únicamente puede venir de la lectura al campus, nunca de un envío ya hecho.
+export async function conSesion(env, operacion) {
+  const cookie = await obtenerCookie(env);
+  try {
+    return await operacion(cookie);
+  } catch (error) {
+    if (!(error instanceof SesionExpirada)) throw error;
+    const nueva = await loginCampus(env);
+    await guardarCookie(env, nueva);
+    return operacion(nueva);
+  }
+}
+
 // Reproduce el login de ASP.NET Forms Authentication: primero pide la
 // pagina para obtener __VIEWSTATE/__EVENTVALIDATION (tokens de un solo uso
 // atados a la sesion), luego postea usuario/contrasena con esos tokens.
-export async function loginCampus(env) {
+async function loginCampus(env) {
   const paginaLogin = await fetch(`${BASE}/Campus/Login.aspx`, { redirect: 'manual' });
   const html = await paginaLogin.text();
   const sessionId = extraerCookie(paginaLogin, 'ASP.NET_SessionId');
@@ -73,7 +118,18 @@ async function llamarMetodo(cookie, ruta, payload = {}) {
     throw new Error(`Campus virtual respondio ${respuesta.status} en ${ruta}`);
   }
 
-  const datos = await respuesta.json();
+  const texto = await respuesta.text();
+  let datos;
+  try {
+    datos = JSON.parse(texto);
+  } catch {
+    throw new SesionExpirada(ruta);
+  }
+  // El PageMethod siempre devuelve {"d": "<json-string>"}; si no viene, lo
+  // que llegó es el HTML del login y no una respuesta real.
+  if (typeof datos.d !== 'string') {
+    throw new SesionExpirada(ruta);
+  }
   return JSON.parse(datos.d);
 }
 

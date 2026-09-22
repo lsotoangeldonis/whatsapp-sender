@@ -1,14 +1,14 @@
 import { enviarMenu, manejarOpcionMenu, responderPreguntaLibre, enviarTexto } from './chatbot.js';
-import { loginCampus, getHorarioDetallado, getPagosPendientes } from './campus.js';
+import { conSesion, getHorarioDetallado, getPagosPendientes } from './campus.js';
 import { obtenerPreferenciasAlertas } from './preferencias.js';
 import { fechaISOLima, fechaLegible, fechaISODesdeCampus, tipoSesion, LIMA_OFFSET_MS } from './fechas.js';
 
-// El horario se consulta en vivo desde el campus virtual (ya no vive en
-// Workers KV): así el recordatorio se adapta solo a cualquier ciclo nuevo,
-// y las excepciones del calendario quedan resueltas por el propio campus.
-async function obtenerHorario(env) {
-  const cookie = await loginCampus(env);
-  const sesiones = await getHorarioDetallado(cookie);
+const CLAVE_HORARIO = 'horario_cache';
+// 26 h: sobrevive entre los refrescos diarios (07:00 y 21:00) sin dejar que
+// un horario viejo quede pegado si los cron dejan de correr.
+const TTL_HORARIO_SEG = 26 * 60 * 60;
+
+function agruparPorFecha(sesiones) {
   const horario = {};
   for (const s of sesiones) {
     const fechaISO = fechaISODesdeCampus(s.cFecha);
@@ -20,6 +20,26 @@ async function obtenerHorario(env) {
     });
   }
   return horario;
+}
+
+// El horario se consulta en vivo desde el campus virtual (ya no vive en
+// Workers KV como dato sembrado a mano): así el recordatorio se adapta solo
+// a cualquier ciclo nuevo, y las excepciones del calendario quedan
+// resueltas por el propio campus. Los recordatorios de 07:00 y 21:00 usan
+// esta versión, y de paso dejan el caché fresco.
+async function obtenerHorarioFresco(env) {
+  const sesiones = await conSesion(env, getHorarioDetallado);
+  const horario = agruparPorFecha(sesiones);
+  await env.HORARIO_KV.put(CLAVE_HORARIO, JSON.stringify(horario), { expirationTtl: TTL_HORARIO_SEG });
+  return horario;
+}
+
+// La alerta de próxima clase corre cada 15 min y solo necesita saber si algo
+// empieza pronto. Leer de KV evita ~96 logins/día contra el campus; ante un
+// caché vacío consulta en vivo y lo repuebla.
+async function obtenerHorarioCacheado(env) {
+  const cacheado = await env.HORARIO_KV.get(CLAVE_HORARIO, 'json');
+  return cacheado || obtenerHorarioFresco(env);
 }
 
 function sesionesDelDia(horario, fechaISO) {
@@ -39,7 +59,7 @@ function hayEnVivo(sesiones) {
 async function enviarRecordatorio(env, fechaISO, prefijo, opciones = {}) {
   let horario;
   try {
-    horario = await obtenerHorario(env);
+    horario = await obtenerHorarioFresco(env);
   } catch (error) {
     console.error('Error obteniendo el horario del campus', error);
     return { enviado: false, motivo: 'error_campus', error: String(error), fecha: fechaISO };
@@ -124,7 +144,7 @@ async function verificarAlertaClase(env) {
 
   let horario;
   try {
-    horario = await obtenerHorario(env);
+    horario = await obtenerHorarioCacheado(env);
   } catch (error) {
     console.error('Error obteniendo el horario para la alerta de clase', error);
     return;
@@ -155,15 +175,14 @@ async function verificarAlertaPago(env) {
   const prefs = await obtenerPreferenciasAlertas(env);
   if (!prefs.proximoPago) return;
 
-  let cookie;
+  let pagos;
   try {
-    cookie = await loginCampus(env);
+    pagos = await conSesion(env, getPagosPendientes);
   } catch (error) {
-    console.error('Error de login para la alerta de pago', error);
+    console.error('Error consultando los pagos para la alerta', error);
     return;
   }
 
-  const pagos = await getPagosPendientes(cookie);
   const hoyISO = fechaISOLima();
   const [anioHoy, mesHoy, diaHoy] = hoyISO.split('-').map(Number);
   const hoyUTC = Date.UTC(anioHoy, mesHoy - 1, diaHoy);
@@ -315,8 +334,7 @@ export default {
       if (!autorizado(request, env)) {
         return new Response('Unauthorized', { status: 401 });
       }
-      const cookie = await loginCampus(env);
-      const sesiones = await getHorarioDetallado(cookie);
+      const sesiones = await conSesion(env, getHorarioDetallado);
       const filtro = url.searchParams.get('curso');
       const filtradas = filtro
         ? sesiones.filter((s) => (s.cAsignatura || '').toUpperCase().includes(filtro.toUpperCase()))
