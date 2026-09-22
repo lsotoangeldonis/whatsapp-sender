@@ -87,6 +87,7 @@ function quitarHtml(texto = '') {
 export async function getCursosActuales(cookie) {
   const cursos = await llamarMetodo(cookie, '/Campus/Default.aspx/Alu_ObtenerCursosActuales', {});
   return cursos.map((c) => ({
+    nGruCodigo: c.nGruCodigo,
     asignatura: c.asignatura,
     docente: [c.docenteNombre, c.docenteApellido].filter(Boolean).join(' '),
     correoDocente: c.correoDocente || null,
@@ -98,6 +99,36 @@ export async function getCursosActuales(cookie) {
     modalidad: c.modalidad,
     silabo: c.cSilabo ? `https://virtual.autonoma.edu.pe${c.cSilabo}` : null,
   }));
+}
+
+// nGruCodigo identifica el curso-grupo (viene de getCursosActuales). nSesion:
+// 0 y nPerfil: 13 (perfil alumno) devuelven el temario completo del curso,
+// no una sola sesión.
+export async function getDetalleSesionesCurso(cookie, nGruCodigo) {
+  const datos = await llamarMetodo(cookie, '/Campus/Default.aspx/getInformationDetailCurso', {
+    nGruCodigo: Number(nGruCodigo),
+    nSesion: 0,
+    nPerfil: 13,
+  });
+  const sesiones = (datos.silabo || []).map((s) => ({
+    sesion: s.nSesion,
+    semanaInicio: s.semana_fecha_inicio,
+    semanaFin: s.semana_fecha_fin,
+    tema: s.tema,
+    logro: s.logro,
+    activa: s.sesion_activa === 1,
+  }));
+  const recursos = (datos.recursos || []).map((r) => ({
+    sesion: r.nSesion,
+    titulo: r.cTitulo,
+    tipo: r.cName, // "Enlace" o "Archivo"
+    // Los "Enlace" traen URL absoluta usable (Zoom, Vimeo, etc). Los
+    // "Archivo" solo traen el nombre del PDF/PPT sin ruta base confirmada,
+    // así que no se arma un link (saldría roto) y se avisa que está en el
+    // campus virtual.
+    url: r.cName === 'Enlace' ? r.url : null,
+  }));
+  return { sesiones, recursos, sesionActiva: datos.nSesionActiva };
 }
 
 export async function getHorarioDetallado(cookie) {

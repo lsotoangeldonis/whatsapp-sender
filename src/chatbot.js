@@ -6,6 +6,7 @@ import {
   getPagosPendientes,
   getRegistroActual,
   getAvanceCarrera,
+  getDetalleSesionesCurso,
 } from './campus.js';
 
 const GRAPH_BASE = 'https://graph.facebook.com/v25.0';
@@ -45,6 +46,7 @@ export async function enviarMenu(env, para) {
               { id: 'menu_horario_hoy', title: 'Horario de hoy' },
               { id: 'menu_proxima_clase', title: 'Próxima clase (Zoom)' },
               { id: 'menu_cursos', title: 'Mis cursos' },
+              { id: 'menu_ver_curso', title: 'Ver un curso' },
               { id: 'menu_notas', title: 'Mis notas / avance' },
               { id: 'menu_pagos', title: 'Pagos pendientes' },
             ],
@@ -81,9 +83,56 @@ async function manejarProximaClase(cookie) {
 async function manejarCursos(cookie) {
   const cursos = await getCursosActuales(cookie);
   const lineas = cursos.map(
-    (c) => `• ${c.asignatura} — ${c.docente}\n  ${c.horario || 'sin horario asignado'} (${c.estado})`
+    (c) =>
+      `• ${c.asignatura} — ${c.docente}\n  ${c.horario || 'sin horario asignado'} (${c.estado})` +
+      (c.silabo ? `\n  📄 Sílabo: ${c.silabo}` : '')
   );
   return `📚 Tus cursos de este periodo:\n\n${lineas.join('\n\n')}`;
+}
+
+async function enviarListaCursos(env, para, cookie) {
+  const cursos = await getCursosActuales(cookie);
+  await enviarWhatsApp(env, {
+    to: para,
+    type: 'interactive',
+    interactive: {
+      type: 'list',
+      header: { type: 'text', text: 'Tus cursos' },
+      body: { text: 'Elige un curso para ver su sílabo y el contenido de la sesión actual.' },
+      action: {
+        button: 'Ver cursos',
+        sections: [
+          {
+            title: 'Cursos',
+            rows: cursos.slice(0, 10).map((c) => ({
+              id: `curso_${c.nGruCodigo}`,
+              title: c.asignatura.length > 24 ? `${c.asignatura.slice(0, 21)}...` : c.asignatura,
+            })),
+          },
+        ],
+      },
+    },
+  });
+}
+
+async function manejarContenidoCurso(cookie, nGruCodigo) {
+  const [cursos, detalle] = await Promise.all([getCursosActuales(cookie), getDetalleSesionesCurso(cookie, nGruCodigo)]);
+  const curso = cursos.find((c) => String(c.nGruCodigo) === String(nGruCodigo));
+  const sesionActiva = detalle.sesiones.find((s) => s.activa) || detalle.sesiones[detalle.sesiones.length - 1];
+  const recursosSesion = sesionActiva ? detalle.recursos.filter((r) => r.sesion === sesionActiva.sesion) : [];
+  const lineasRecursos = recursosSesion.map((r) =>
+    r.tipo === 'Enlace' ? `• ${r.titulo}: ${r.url}` : `• ${r.titulo} (archivo — disponible en el campus virtual, sección Recursos)`
+  );
+
+  const partes = [`📘 ${curso?.asignatura || 'Curso'}`];
+  if (curso?.silabo) partes.push(`📄 Sílabo: ${curso.silabo}`);
+  if (sesionActiva) {
+    partes.push(`\n🗓️ Sesión ${sesionActiva.sesion} (${sesionActiva.semanaInicio}–${sesionActiva.semanaFin}):\n${sesionActiva.tema}`);
+  }
+  if (lineasRecursos.length > 0) {
+    partes.push(`\n📎 Recursos de esta sesión:\n${lineasRecursos.join('\n')}`);
+  }
+  return partes.join('\n');
 }
 
 async function manejarNotas(cookie) {
@@ -117,6 +166,31 @@ export async function manejarOpcionMenu(env, para, idOpcion) {
     await enviarTexto(env, para, 'Escríbeme tu pregunta y te respondo 🙂');
     return;
   }
+
+  if (idOpcion === 'menu_ver_curso') {
+    try {
+      const cookie = await loginCampus(env);
+      await enviarListaCursos(env, para, cookie);
+    } catch (error) {
+      console.error('Error listando cursos', error);
+      await enviarTexto(env, para, '⚠️ No pude consultar el campus virtual ahora mismo. Intenta de nuevo en un momento.');
+    }
+    return;
+  }
+
+  if (idOpcion.startsWith('curso_')) {
+    const nGruCodigo = idOpcion.slice('curso_'.length);
+    try {
+      const cookie = await loginCampus(env);
+      const texto = await manejarContenidoCurso(cookie, nGruCodigo);
+      await enviarTexto(env, para, texto);
+    } catch (error) {
+      console.error('Error consultando contenido del curso', error);
+      await enviarTexto(env, para, '⚠️ No pude consultar el contenido de ese curso ahora mismo. Intenta de nuevo en un momento.');
+    }
+    return;
+  }
+
   const handler = HANDLERS_MENU[idOpcion];
   if (!handler) {
     await enviarTexto(env, para, 'No reconocí esa opción, escribe "menu" para ver las opciones de nuevo.');
@@ -160,9 +234,21 @@ const HERRAMIENTAS = [
     description: 'Devuelve las cuotas pendientes de pago, con monto y fecha de vencimiento.',
     input_schema: { type: 'object', properties: {} },
   },
+  {
+    name: 'get_contenido_curso',
+    description:
+      'Devuelve el sílabo (link), el temario semana a semana de todas las sesiones, y los recursos/adjuntos (enlaces a Zoom, Vimeo, plataformas externas) de un curso específico.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        curso: { type: 'string', description: 'Nombre o parte del nombre del curso, ej. "Inglés" o "Programación"' },
+      },
+      required: ['curso'],
+    },
+  },
 ];
 
-async function ejecutarHerramienta(cookie, nombre) {
+async function ejecutarHerramienta(cookie, nombre, input) {
   switch (nombre) {
     case 'get_horario_detallado':
       return getHorarioDetallado(cookie);
@@ -176,6 +262,13 @@ async function ejecutarHerramienta(cookie, nombre) {
     }
     case 'get_pagos_pendientes':
       return getPagosPendientes(cookie);
+    case 'get_contenido_curso': {
+      const cursos = await getCursosActuales(cookie);
+      const curso = cursos.find((c) => c.asignatura.toUpperCase().includes((input?.curso || '').toUpperCase()));
+      if (!curso) return { error: `No encontré ningún curso que coincida con "${input?.curso}"` };
+      const detalle = await getDetalleSesionesCurso(cookie, curso.nGruCodigo);
+      return { curso: curso.asignatura, silabo: curso.silabo, ...detalle };
+    }
     default:
       throw new Error(`Herramienta desconocida: ${nombre}`);
   }
@@ -233,7 +326,7 @@ export async function responderPreguntaLibre(env, para, pregunta) {
     const resultados = await Promise.all(
       bloquesHerramienta.map(async (bloque) => {
         try {
-          const resultado = await ejecutarHerramienta(cookie, bloque.name);
+          const resultado = await ejecutarHerramienta(cookie, bloque.name, bloque.input);
           return { type: 'tool_result', tool_use_id: bloque.id, content: JSON.stringify(resultado) };
         } catch (error) {
           return { type: 'tool_result', tool_use_id: bloque.id, content: String(error), is_error: true };
