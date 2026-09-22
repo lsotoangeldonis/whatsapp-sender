@@ -183,6 +183,39 @@ explícitamente a Claude a usar `*negrita con un solo asterisco*` (no
 simples — esto costó un bug real (Claude usaba `**` por default) antes de
 agregar la instrucción.
 
+## Optimización del volumen de logins
+
+Estado actual: `loginCampus()` corre en cada invocación que toca el campus.
+Con la alerta de próxima clase activa eso son ~96 logins/día del cron de 15
+minutos, más uno por cada opción de menú (y una navegación
+curso → sesiones → contenido son 3 logins seguidos).
+
+Dos palancas, en orden de impacto:
+
+**1. Cachear el horario en KV (mata el ~95% del volumen).** El cron de 15
+min hoy hace login + `getHorarioDetallado` solo para preguntar "¿empieza
+alguna clase en los próximos 15 minutos?". Ese calendario cambia como mucho
+una vez al día. Guardándolo en KV y refrescándolo una vez al día (por
+ejemplo en el cron de las 07:00, que ya hace login igual), el cron de 15
+min pasa a hacer una **lectura de KV** y cero logins. Los logins del cron
+bajan de ~96/día a ~2.
+
+Importante: esto **no** vuelve al modelo viejo de sembrar el horario a mano.
+El refresco es automático y diario, así que se sigue adaptando solo a un
+ciclo nuevo o a un cambio de calendario — solo con hasta un día de lag, que
+para un horario de clases es irrelevante. Costo en KV: ~2 escrituras/día
+(límite 1000/día) y ~96 lecturas/día (límite 100 000/día).
+
+**2. Cachear la cookie de sesión en KV (arregla las ráfagas del menú).** La
+cookie `.ASPXFORMSAUTH` sirve hasta que el campus la expira. Guardándola en
+KV con un TTL corto, una navegación de menú completa usa 1 login en vez de
+3-4. Requiere reintentar con login nuevo si el campus la rechaza (la sesión
+puede caducar antes del TTL), que es la parte que agrega complejidad. El
+TTL real hay que medirlo: ASP.NET Forms Auth suele usar 20-30 min
+deslizantes, pero no está confirmado en este campus.
+
+Con ambas, el total baja de ~100-120 logins/día a menos de 10.
+
 ## Endpoints del campus virtual (reverse-engineered)
 
 Todos son PageMethods de ASP.NET: `POST` con `Content-Type:
@@ -538,8 +571,12 @@ falta un fallback estático), pero no son parte del flujo activo.
   diarios, y cubierto por la ventana de 8–22 min en la alerta de clase.
 - **Sesión del campus por request**: cada llamada a `loginCampus()` hace un
   login completo (no hay sesión persistente entre invocaciones del Worker),
-  así que cada opción del menú o herramienta de Claude paga ese costo. Es
-  aceptable para el volumen de uso actual (un solo usuario).
+  así que cada opción del menú y cada corrida de cron paga ese costo. Con la
+  alerta de próxima clase activada son **~96 logins/día solo del cron de 15
+  min**, más uno por cada toque de menú. No es un problema de seguridad,
+  pero si el campus tiene detección de logins repetidos es el tipo de cosa
+  que bloquea la cuenta sin aviso. Las dos palancas para bajarlo están
+  descritas en "Optimización del volumen de logins".
 - **Recursos tipo "Archivo"** (PDF/PPT subidos al campus) no traen una URL
   absoluta confiable en la respuesta del endpoint — el bot solo avisa que
   están disponibles en el campus virtual, sin link directo.
