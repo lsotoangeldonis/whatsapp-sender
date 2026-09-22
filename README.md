@@ -12,6 +12,11 @@ se use en modo prueba y el Worker se mantenga en el plan Free de Cloudflare).
 Cron Triggers (07:00 y 21:00 hora Lima) ya están enviando mensajes reales sin
 intervención manual.
 
+✅ **Chatbot interactivo** funcionando sobre el mismo Worker (`/webhook`):
+menú de WhatsApp con respuestas deterministas contra el campus virtual, y
+fallback a Claude (Haiku 4.5) con tool-calling para preguntas libres. Ver
+sección "Chatbot" más abajo.
+
 ## Cómo funciona
 
 Dos Cron Triggers (hora Lima, UTC-5):
@@ -30,6 +35,56 @@ cursos, fechas y horarios reales). Vive únicamente en KV, en tu cuenta de
 Cloudflare, sembrado una vez desde un GitHub Secret (ver Fase C).
 
 Se incluyen **todas** las sesiones (EN VIVO y Asesoría) del día correspondiente.
+
+## Chatbot (WhatsApp interactivo)
+
+Además del recordatorio automático, el mismo Worker atiende mensajes
+entrantes en `/webhook`:
+
+- Al escribir **"menu"** (o "menú", "hola", "inicio", "ayuda") se envía un
+  mensaje interactivo tipo lista con 5 consultas rápidas (horario de hoy,
+  próxima clase, cursos, notas/avance, pagos pendientes) más la opción
+  "Otra pregunta". Estas opciones llaman directo a `src/campus.js` y
+  formatean texto fijo — **no pasan por Claude**, costo cero de API.
+- Cualquier otro texto libre se manda a Claude (`claude-haiku-4-5`) con
+  tool-calling sobre 5 herramientas que consultan el campus virtual en
+  vivo (`src/chatbot.js`).
+- `src/campus.js` reproduce el login de ASP.NET Forms Authentication del
+  campus virtual (usuario/contraseña en `CAMPUS_USUARIO`/`CAMPUS_PASSWORD`)
+  y llama a los PageMethods internos (`Alu_ObtenerCursosActuales`,
+  `Alu_ObtenerHorarioClase`, `ObtenerDataAvanceCarrera`, etc.).
+
+### Configuración del webhook en Meta
+
+1. En tu app de Meta → **WhatsApp → Configuración → Webhook**, la URL de
+   callback es `https://<tu-worker>.workers.dev/webhook` y el token de
+   verificación debe coincidir con el secret `WEBHOOK_VERIFY_TOKEN`.
+2. Suscribe el campo **`messages`**.
+3. **La app debe estar en modo Live ("Publicada"), no en Development** —
+   en Development, Meta solo entrega payloads simulados (botón "Probar"),
+   nunca mensajes reales de usuarios. Publica la app desde **Casos de
+   uso → Publicar** (puede pedir una URL de política de privacidad; basta
+   con apuntar al README del repo, ej.
+   `https://github.com/lsotoangeldonis/whatsapp-sender#readme`).
+4. **La WABA debe estar suscrita a la app.** El webhook a nivel de app
+   puede estar perfecto y aun así no recibir nada si este paso quedó
+   pendiente (típico si el número de prueba se creó desde API Setup en
+   vez de un flujo de Embedded Signup). Se hace con:
+
+   ```
+   POST https://graph.facebook.com/v25.0/<WABA_ID>/subscribed_apps
+   Authorization: Bearer <WHATSAPP_TOKEN>
+   ```
+
+   El Worker expone un atajo protegido por `TEST_TOKEN` para esto:
+
+   ```
+   GET /subscribe-app?token=<TEST_TOKEN>&waba_id=<WABA_ID>
+   ```
+
+   El `WABA_ID` (WhatsApp Business Account ID) se ve en la pantalla
+   **API Setup**. Solo hace falta correrlo una vez, salvo que Meta la
+   des-suscriba (ej. tras cambios grandes en la app).
 
 ## Fase A — Meta (en el navegador, sin código)
 
@@ -89,7 +144,7 @@ El workflow `.github/workflows/deploy.yml` despliega el Worker en cada push a
 máquina ni de la red de quien lo ejecute.
 
 1. En GitHub: **Settings → Secrets and variables → Actions → New repository
-   secret**, y agrega estos 9 secrets (nunca quedan visibles después de
+   secret**, y agrega estos secrets (nunca quedan visibles después de
    guardarlos, ni en los logs del workflow):
 
    | Secret | Valor |
@@ -99,10 +154,14 @@ máquina ni de la red de quien lo ejecute.
    | `WHATSAPP_TOKEN` | Token permanente del usuario del sistema (Fase A.5) |
    | `PHONE_NUMBER_ID` | De la pantalla API Setup |
    | `DESTINATARIO` | Tu número, formato internacional sin `+` (ej. `51987654321`) |
-   | `TEST_TOKEN` | Uno propio, aleatorio, para proteger el endpoint `/test` |
+   | `TEST_TOKEN` | Uno propio, aleatorio, para proteger los endpoints `/test` y `/subscribe-app` |
    | `WHATSAPP_TEMPLATE_NAME` | Nombre de la plantilla aprobada (ej. `recordatorio_clases`) |
    | `WHATSAPP_TEMPLATE_LANG` | Código de idioma de la plantilla (ej. `es`) |
    | `HORARIO_JSON` | El contenido completo de tu horario en JSON (ver abajo) — solo se usa una vez para sembrar KV, nunca queda en el código |
+   | `ANTHROPIC_API_KEY` | Clave de la Claude Console, para el fallback de preguntas libres del chatbot |
+   | `CAMPUS_USUARIO` | Usuario del campus virtual |
+   | `CAMPUS_PASSWORD` | Contraseña del campus virtual |
+   | `WEBHOOK_VERIFY_TOKEN` | Uno propio, aleatorio, para el handshake de verificación del webhook de Meta |
 
 2. Ve a la pestaña **Actions → Deploy Worker → Run workflow**, elige esta
    rama y ejecútalo. También se dispara solo en cada push a `main`.
