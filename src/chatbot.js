@@ -181,7 +181,9 @@ async function ejecutarHerramienta(cookie, nombre) {
   }
 }
 
-const SYSTEM_PROMPT = `Eres un asistente que responde preguntas sobre la vida académica del estudiante en la Universidad Autónoma del Perú, usando las herramientas disponibles para consultar datos reales de su campus virtual. Responde en español, corto y directo (esto es un chat de WhatsApp). Usa emojis con moderación. Si no tienes una herramienta que responda la pregunta, dilo claramente en vez de inventar datos.`;
+const SYSTEM_PROMPT = `Eres un asistente que responde preguntas sobre la vida académica del estudiante en la Universidad Autónoma del Perú, usando las herramientas disponibles para consultar datos reales de su campus virtual. Responde en español, corto y directo (esto es un chat de WhatsApp). Usa emojis con moderación. Si no tienes una herramienta que responda la pregunta, dilo claramente en vez de inventar datos.
+
+Formato: esto es WhatsApp, no Markdown estándar. Para negrita usa *un solo asterisco* (no **dobles**), para cursiva _guion bajo_, y listas con guiones simples. Nunca uses **.`;
 
 export async function responderPreguntaLibre(env, para, pregunta) {
   let cookie;
