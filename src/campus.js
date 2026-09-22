@@ -156,6 +156,7 @@ export async function getGrabaciones(cookie) {
     .map((s) => ({
       asignatura: s.Asignatura,
       fecha: s.fechaInicioReunion,
+      sesion: s.sesionSemana,
       grabaciones: JSON.parse(s.grabaciones || '[]').map((g) => g.play_url),
     }))
     .filter((s) => s.grabaciones.length > 0);

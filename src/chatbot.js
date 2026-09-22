@@ -155,7 +155,11 @@ async function enviarListaSesiones(env, para, cookie, nGruCodigo) {
 }
 
 async function manejarContenidoSesion(cookie, nGruCodigo, numeroSesion) {
-  const [cursos, detalle] = await Promise.all([getCursosActuales(cookie), getDetalleSesionesCurso(cookie, nGruCodigo)]);
+  const [cursos, detalle, grabaciones] = await Promise.all([
+    getCursosActuales(cookie),
+    getDetalleSesionesCurso(cookie, nGruCodigo),
+    getGrabaciones(cookie).catch(() => []),
+  ]);
   const curso = cursos.find((c) => String(c.nGruCodigo) === String(nGruCodigo));
   const sesion = detalle.sesiones.find((s) => String(s.sesion) === String(numeroSesion));
   if (!sesion) return 'No encontré esa sesión.';
@@ -163,12 +167,19 @@ async function manejarContenidoSesion(cookie, nGruCodigo, numeroSesion) {
   const lineasRecursos = recursosSesion.map((r) =>
     r.tipo === 'Enlace' ? `• ${r.titulo}: ${r.url}` : `• ${r.titulo} (archivo — disponible en el campus virtual, sección Recursos)`
   );
+  const grabacionesSesion = grabaciones.filter(
+    (g) => g.asignatura.toUpperCase() === (curso?.asignatura || '').toUpperCase() && String(g.sesion) === String(numeroSesion)
+  );
 
   const partes = [`📘 ${curso?.asignatura || 'Curso'}`];
   if (curso?.silabo) partes.push(`📄 Sílabo: ${curso.silabo}`);
   partes.push(`\n🗓️ Sesión ${sesion.sesion} (${sesion.semanaInicio}–${sesion.semanaFin}):\n${sesion.tema}`);
   if (lineasRecursos.length > 0) {
     partes.push(`\n📎 Recursos de esta sesión:\n${lineasRecursos.join('\n')}`);
+  }
+  if (grabacionesSesion.length > 0) {
+    const lineasGrabaciones = grabacionesSesion.flatMap((g) => g.grabaciones.map((url) => `• ${g.fecha}: ${url}`));
+    partes.push(`\n🎥 Grabación:\n${lineasGrabaciones.join('\n')}`);
   }
   return partes.join('\n');
 }
