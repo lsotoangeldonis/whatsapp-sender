@@ -8,3 +8,6 @@ crons = ["0 12 * * *", "0 2 * * *"]
 [[kv_namespaces]]
 binding = "HORARIO_KV"
 id = "d718de44ca1442f39fd99f6a82b08600"
+
+[observability]
+enabled = true
