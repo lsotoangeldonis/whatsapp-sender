@@ -3,6 +3,7 @@ import {
   conSesion,
   getHorarioDetallado,
   getPagosPendientes,
+  getProximasSesiones,
   getCursosActuales,
   getDetalleSesionesCurso,
   getGrabaciones,
@@ -85,6 +86,14 @@ async function enviarRecordatorio(env, fechaISO, prefijo, opciones = {}) {
       ? 'No tienes clases programadas para hoy.'
       : formatearSesiones(sesiones) + (hayEnVivo(sesiones) ? '' : ' · ⚠️ Ninguna es EN VIVO.');
 
+  const resultado = await enviarPlantilla(env, encabezado, cuerpo, opciones);
+  return { ...resultado, fecha: fechaISO };
+}
+
+// Plantilla recordatorio_clases: "{{1}}: {{2}}". A diferencia del texto
+// libre, llega aunque no le hayas escrito al bot en las últimas 24 h, así
+// que es la vía para todo lo que tiene hora (recordatorios y alertas).
+async function enviarPlantilla(env, encabezado, cuerpo, opciones = {}) {
   const template = {
     name: opciones.plantilla || env.WHATSAPP_TEMPLATE_NAME || 'recordatorio_clases',
     language: { code: opciones.idioma || env.WHATSAPP_TEMPLATE_LANG || 'es' },
@@ -123,7 +132,7 @@ async function enviarRecordatorio(env, fechaISO, prefijo, opciones = {}) {
     });
   } catch (error) {
     console.error('Error de red al llamar a la Graph API', error);
-    return { enviado: false, motivo: 'error_red', error: String(error), fecha: fechaISO };
+    return { enviado: false, motivo: 'error_red', error: String(error) };
   }
 
   const textoCrudo = await respuesta.text();
@@ -136,10 +145,10 @@ async function enviarRecordatorio(env, fechaISO, prefijo, opciones = {}) {
 
   if (!respuesta.ok) {
     console.error('Error al enviar WhatsApp', respuesta.status, JSON.stringify(datos));
-    return { enviado: false, motivo: 'error_api', status: respuesta.status, datos, fecha: fechaISO };
+    return { enviado: false, motivo: 'error_api', status: respuesta.status, datos };
   }
 
-  return { enviado: true, datos, fecha: fechaISO };
+  return { enviado: true, datos };
 }
 
 // --- Resumen de las clases de ayer ---
@@ -262,8 +271,32 @@ async function verificarAlertaClase(env) {
     const claveDedupe = `alerta_clase:${fechaISO}:${s.inicio}:${s.curso}`;
     if (await env.HORARIO_KV.get(claveDedupe)) continue;
 
-    await enviarTexto(env, env.DESTINATARIO, `⏰ Tu clase de *${s.curso}* (${s.tipo}) empieza en ~15 minutos, a las ${s.inicio}.`);
+    const enlace = await enlaceDeZoom(env, s.curso, s.inicio);
+    const cuerpo = `${s.inicio}–${s.fin} ${s.curso} (${s.tipo})` + (enlace ? ` · Entra aquí: ${enlace}` : '');
+    await enviarPlantilla(env, '⏰ Empieza en 15 minutos', cuerpo);
     await env.HORARIO_KV.put(claveDedupe, '1', { expirationTtl: 60 * 60 * 24 });
+  }
+}
+
+// Mayúsculas y sin tildes: el horario y las sesiones de Zoom salen de
+// endpoints distintos del campus y no siempre escriben igual el nombre
+// ("ANÁLISIS" vs "ANALISIS").
+function normalizarCurso(nombre) {
+  return String(nombre).normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().trim();
+}
+
+// El horario cacheado no trae el enlace, así que se consulta al campus
+// solo cuando hay una alerta que mandar (1-3 veces al día), no en cada
+// corrida del cron. Si falla, la alerta sale igual, sin enlace.
+async function enlaceDeZoom(env, curso, inicio) {
+  try {
+    const { sesionesHoy } = await conSesion(env, getProximasSesiones);
+    const delCurso = sesionesHoy.filter((x) => normalizarCurso(x.asignatura) === normalizarCurso(curso));
+    const aEsaHora = delCurso.find((x) => String(x.fecha).includes(inicio));
+    return (aEsaHora || delCurso[0])?.enlace || null;
+  } catch (error) {
+    console.error('No se pudo obtener el enlace de Zoom para la alerta', error);
+    return null;
   }
 }
 
@@ -421,7 +454,19 @@ export default {
         }
 
         const cuerpo = JSON.parse(new TextDecoder().decode(cuerpoCrudo));
-        const mensaje = cuerpo.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
+        const valor = cuerpo.entry?.[0]?.changes?.[0]?.value;
+
+        // Meta no rechaza en el momento el texto libre fuera de la ventana
+        // de 24 h: la API responde 200 y avisa después, por este webhook,
+        // con status "failed" (código 131047). Sin registrarlo, esos
+        // mensajes se pierden sin dejar ningún rastro.
+        for (const estado of valor?.statuses || []) {
+          if (estado.status === 'failed') {
+            console.error('WhatsApp no entregó un mensaje', estado.id, JSON.stringify(estado.errors));
+          }
+        }
+
+        const mensaje = valor?.messages?.[0];
         if (mensaje) {
           ctx.waitUntil(manejarMensajeEntrante(env, mensaje));
         }

@@ -56,22 +56,57 @@ Los tres respetan las preferencias guardadas en KV (ver "Configurar alertas"
 más abajo) — si un toggle está apagado, el cron corre igual pero no envía
 nada para esa alerta.
 
-- **Resumen/aviso** (07:00 y 21:00) se envían como **mensaje de plantilla**
-  aprobada por Meta (`recordatorio_clases`), porque el envío es automático y
-  siempre cae fuera de la ventana de 24h de conversación de WhatsApp.
-- **Alerta de próxima clase** y **alerta de pago** se envían como **texto
-  libre** (`enviarTexto`) — esto solo funciona dentro de la ventana de 24h
-  desde el último mensaje del usuario al bot. En la práctica, como el
-  usuario interactúa seguido con el chatbot, la ventana casi siempre está
-  abierta; si no lo está, el envío falla silenciosamente (se loguea el
-  error pero no hay reintento ni fallback a plantilla).
+- **Resumen/aviso** (07:00 y 21:00) y **alerta de próxima clase** se envían
+  como **mensaje de plantilla** aprobada por Meta (`recordatorio_clases`,
+  vía `enviarPlantilla()`), porque son automáticos y llegan aunque no le
+  hayas escrito al bot en las últimas 24 h.
+- **Resumen de ayer** y **alerta de pago** siguen como **texto libre**
+  (`enviarTexto`), y solo llegan si la ventana de 24 h está abierta — ver
+  "La ventana de 24 h" más abajo.
 - **Alerta de próxima clase**: ventana de detección 8–22 minutos de
   anticipación (para no perderse el aviso entre dos corridas de 15 min),
   con dedupe en KV (`alerta_clase:<fechaISO>:<horaInicio>:<curso>`, TTL 24h)
-  para no repetir el mismo aviso en la siguiente corrida.
+  para no repetir el mismo aviso en la siguiente corrida. Incluye el
+  **enlace de Zoom** para entrar: el horario cacheado no lo trae, así que se
+  pide a `obtenerSesionesVirtualesHoyProxima` solo cuando hay una alerta que
+  mandar (1-3 veces al día), no en cada corrida — el cron sigue sin hacer
+  logins el resto del tiempo. Los nombres se comparan en mayúsculas y sin
+  tildes, porque ese endpoint y el del horario no siempre escriben igual el
+  curso ("ANÁLISIS" vs "ANALISIS"). Si falla, la alerta sale igual, sin
+  enlace.
 - **Alerta de pago**: corre una vez al día (enganchada al cron de 07:00),
   compara `FecVenc` de cada cuota pendiente contra hoy, avisa si vence en
   0–3 días.
+
+### La ventana de 24 h (y por qué la alerta de clase dejó de llegar)
+
+WhatsApp solo entrega **texto libre** si le escribiste al bot en las
+últimas 24 horas; fuera de esa ventana solo pasan las **plantillas**
+aprobadas. Recibir mensajes del bot no abre la ventana: la abre solo un
+mensaje tuyo.
+
+La alerta de próxima clase salía originalmente como texto libre, bajo el
+supuesto de que usarías el chatbot a diario. En la práctica no fue así: el
+chat quedó solo con plantillas y ningún mensaje del usuario, las alertas
+dejaron de llegar, y **no quedó ningún error registrado**. El motivo es que
+Meta no rechaza el texto libre en el momento: la API responde 200, y el
+rechazo (código **131047**, *Re-engagement message*) llega después, como un
+webhook de estado `failed` que el bot ignoraba. Además la clave de dedupe se
+escribía igual, así que el aviso quedaba marcado como enviado.
+
+Se arregló en dos partes:
+
+- La alerta pasó a la plantilla `recordatorio_clases`, con el encabezado
+  `⏰ Empieza en 15 minutos` y el curso, horario y enlace de Zoom en el
+  cuerpo.
+- `/webhook` ahora registra los estados `failed` que manda Meta
+  (`WhatsApp no entregó un mensaje <id> [...]` en los logs), así que un
+  rechazo asíncrono así ya no pasa en silencio.
+
+**Lo que sigue dependiendo de la ventana**: el resumen de ayer (necesita
+saltos de línea y enlaces, que una plantilla no admite en un parámetro) y
+la alerta de pago. Mientras la ventana esté cerrada, esos dos no llegan. La
+salida robusta es una plantilla propia para cada uno — ver "Pendientes".
 
 ### El mensaje de la mañana
 
@@ -654,9 +689,13 @@ falta un fallback estático), pero no son parte del flujo activo.
 
 ## Decisiones tomadas
 
-- Horario, cursos, notas, pagos, grabaciones y anuncios se consultan **en
-  vivo** contra el campus virtual — nada de eso vive en el repo (es
-  información personal) ni se cachea en KV.
+- Horario, cursos, notas, pagos, grabaciones y anuncios vienen **del campus
+  en vivo** — nada de eso vive en el repo (es información personal). El
+  único dato cacheado es el horario (TTL 26 h, refrescado solo dos veces al
+  día) para no hacer ~96 logins diarios.
+- Todo lo que tiene hora y **tiene que llegar** (recordatorios y alerta de
+  clase) va por **plantilla**, no por texto libre: la ventana de 24 h no se
+  puede dar por abierta.
 - Envío automático en **tres** momentos: 07:00 (resumen de hoy), 21:00
   (aviso de mañana) y cada 15 min (alerta de próxima clase por empezar),
   más una revisión diaria de pagos por vencer — todos configurables on/off
@@ -667,3 +706,27 @@ falta un fallback estático), pero no son parte del flujo activo.
 - El menú de WhatsApp se organiza en submenús (Horario; Ver un curso →
   sesiones → contenido; Configurar alertas) en vez de una lista plana,
   porque WhatsApp limita los mensajes tipo lista a 10 filas en total.
+
+## Pendientes
+
+- **Alerta de pago por plantilla.** Sigue como texto libre, así que con la
+  ventana cerrada no llega — y es la más cara de perderse (vencimiento,
+  descuento por pronto pago). No conviene meterla en `recordatorio_clases`:
+  el encabezado dice "Recordatorio de clases" y Meta puede considerar mal
+  uso mandar por una plantilla contenido que no corresponde a lo aprobado.
+  Hay que crear en Meta una plantilla *Utility* propia (ej.
+  `recordatorio_pago`: `Cuota {{1}} vence {{2}}: S/ {{3}}`) y apuntar
+  `verificarAlertaPago()` a ella.
+- **Resumen de ayer que llegue siempre.** No cabe en una plantilla (lleva
+  saltos de línea y varios enlaces). La salida limpia es una plantilla con
+  un **botón de respuesta rápida** ("Ver resumen de ayer"): al tocarlo, el
+  toque cuenta como mensaje tuyo, abre la ventana, y el bot manda el
+  resumen completo como texto libre.
+- **Endpoint de tareas/actividades.** No se encontró todavía. Daría fechas
+  de entrega exactas, que es lo que falta para anotar pendientes.
+- **¿Hay transcripción de Zoom?** Revisar si el campo `grabaciones` de
+  `obtenerCursosSesionesOnline` trae un archivo `file_type: "TRANSCRIPT"`
+  además del `play_url`. Si lo trae, analizar la clase con Claude cuesta
+  ~US$1-2/mes; si no, hay que transcribir el audio aparte (~US$30/mes).
+- **TTL real de la cookie del campus.** Se usa 15 min por precaución; no se
+  midió.
