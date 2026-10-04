@@ -60,9 +60,14 @@ nada para esa alerta.
   como **mensaje de plantilla** aprobada por Meta (`recordatorio_clases`,
   vía `enviarPlantilla()`), porque son automáticos y llegan aunque no le
   hayas escrito al bot en las últimas 24 h.
-- **Resumen de ayer** y **alerta de pago** siguen como **texto libre**
-  (`enviarTexto`), y solo llegan si la ventana de 24 h está abierta — ver
-  "La ventana de 24 h" más abajo.
+- **Alerta de pago** usa su propia plantilla (`recordatorio_pago`, ver Fase
+  A.4). Si Meta la rechaza en el momento —porque todavía no existe o está en
+  revisión— cae al texto libre de antes, así que el código se puede
+  desplegar antes de que la plantilla esté aprobada y empieza a usarla solo
+  cuando lo esté.
+- **Resumen de ayer** sigue como **texto libre** (`enviarTexto`), y solo
+  llega si la ventana de 24 h está abierta — ver "La ventana de 24 h" más
+  abajo.
 - **Alerta de próxima clase**: ventana de detección 8–22 minutos de
   anticipación (para no perderse el aviso entre dos corridas de 15 min),
   con dedupe en KV (`alerta_clase:<fechaISO>:<horaInicio>:<curso>`, TTL 24h)
@@ -103,10 +108,12 @@ Se arregló en dos partes:
   (`WhatsApp no entregó un mensaje <id> [...]` en los logs), así que un
   rechazo asíncrono así ya no pasa en silencio.
 
-**Lo que sigue dependiendo de la ventana**: el resumen de ayer (necesita
-saltos de línea y enlaces, que una plantilla no admite en un parámetro) y
-la alerta de pago. Mientras la ventana esté cerrada, esos dos no llegan. La
-salida robusta es una plantilla propia para cada uno — ver "Pendientes".
+La alerta de pago se pasó después a su propia plantilla
+(`recordatorio_pago`), con caída a texto libre mientras no esté aprobada.
+
+**Lo que sigue dependiendo de la ventana**: el resumen de ayer, que
+necesita saltos de línea y enlaces que una plantilla no admite en un
+parámetro. Mientras la ventana esté cerrada, no llega — ver "Pendientes".
 
 ### El mensaje de la mañana
 
@@ -387,6 +394,30 @@ en paralelo con `getCurriculaAlumno`, cada vez que se llama
    nombre debe coincidir con `WHATSAPP_TEMPLATE_NAME` (por defecto
    `recordatorio_clases`) — ya está **aprobada y activa**, este paso solo
    hace falta si la recreas o agregas una plantilla nueva.
+
+   Una segunda plantilla, para la alerta de pago:
+
+   ```
+   Nombre: recordatorio_pago
+   Categoría: Utility
+   Idioma: Spanish (es)
+   Cuerpo:
+   Recordatorio de pago 💰
+   Tu cuota {{1}} por S/ {{2}} vence {{3}}.
+   Revisa tus pagos pendientes en el campus virtual.
+   ```
+
+   Valores de ejemplo que pide Meta al enviarla a revisión: `{{1}}` = `3`,
+   `{{2}}` = `450.00`, `{{3}}` = `mañana (27/09/2026)`.
+
+   - El nombre tiene que ser exactamente `recordatorio_pago` (es la
+     constante `PLANTILLA_PAGO` en `index.js`), y el idioma `es`, el mismo
+     de la otra plantilla.
+   - Sin lenguaje promocional (nada de "aprovecha el descuento"): un aviso
+     de vencimiento de una deuda existente es *Utility*, pero si suena a
+     oferta Meta puede reclasificarla como *Marketing*.
+   - El cuerpo no puede empezar ni terminar con una variable; por eso la
+     primera y la última línea son texto fijo.
 5. En **Business Suite → Configuración → Usuarios → Usuarios del sistema**,
    crea un usuario del sistema, asígnale la app de WhatsApp con permisos
    `whatsapp_business_messaging` y `whatsapp_business_management`, y genera un
@@ -693,9 +724,9 @@ falta un fallback estático), pero no son parte del flujo activo.
   en vivo** — nada de eso vive en el repo (es información personal). El
   único dato cacheado es el horario (TTL 26 h, refrescado solo dos veces al
   día) para no hacer ~96 logins diarios.
-- Todo lo que tiene hora y **tiene que llegar** (recordatorios y alerta de
-  clase) va por **plantilla**, no por texto libre: la ventana de 24 h no se
-  puede dar por abierta.
+- Todo lo que tiene hora y **tiene que llegar** (recordatorios, alerta de
+  clase y alerta de pago) va por **plantilla**, no por texto libre: la
+  ventana de 24 h no se puede dar por abierta.
 - Envío automático en **tres** momentos: 07:00 (resumen de hoy), 21:00
   (aviso de mañana) y cada 15 min (alerta de próxima clase por empezar),
   más una revisión diaria de pagos por vencer — todos configurables on/off
@@ -709,14 +740,12 @@ falta un fallback estático), pero no son parte del flujo activo.
 
 ## Pendientes
 
-- **Alerta de pago por plantilla.** Sigue como texto libre, así que con la
-  ventana cerrada no llega — y es la más cara de perderse (vencimiento,
-  descuento por pronto pago). No conviene meterla en `recordatorio_clases`:
-  el encabezado dice "Recordatorio de clases" y Meta puede considerar mal
-  uso mandar por una plantilla contenido que no corresponde a lo aprobado.
-  Hay que crear en Meta una plantilla *Utility* propia (ej.
-  `recordatorio_pago`: `Cuota {{1}} vence {{2}}: S/ {{3}}`) y apuntar
-  `verificarAlertaPago()` a ella.
+- **Crear y aprobar `recordatorio_pago` en Meta** (Fase A.4). El código
+  ya la usa; hasta que esté aprobada, la alerta de pago sigue cayendo a
+  texto libre y depende de la ventana de 24 h. No se metió en
+  `recordatorio_clases` porque su encabezado dice "Recordatorio de clases"
+  y Meta puede tomar como mal uso mandar por una plantilla contenido
+  distinto del aprobado.
 - **Resumen de ayer que llegue siempre.** No cabe en una plantilla (lleva
   saltos de línea y varios enlaces). La salida limpia es una plantilla con
   un **botón de respuesta rápida** ("Ver resumen de ayer"): al tocarlo, el

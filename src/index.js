@@ -86,14 +86,16 @@ async function enviarRecordatorio(env, fechaISO, prefijo, opciones = {}) {
       ? 'No tienes clases programadas para hoy.'
       : formatearSesiones(sesiones) + (hayEnVivo(sesiones) ? '' : ' · ⚠️ Ninguna es EN VIVO.');
 
-  const resultado = await enviarPlantilla(env, encabezado, cuerpo, opciones);
+  const resultado = await enviarPlantilla(env, [encabezado, cuerpo], opciones);
   return { ...resultado, fecha: fechaISO };
 }
 
-// Plantilla recordatorio_clases: "{{1}}: {{2}}". A diferencia del texto
-// libre, llega aunque no le hayas escrito al bot en las últimas 24 h, así
-// que es la vía para todo lo que tiene hora (recordatorios y alertas).
-async function enviarPlantilla(env, encabezado, cuerpo, opciones = {}) {
+// A diferencia del texto libre, una plantilla llega aunque no le hayas
+// escrito al bot en las últimas 24 h, así que es la vía para todo lo que
+// tiene hora. Por defecto usa recordatorio_clases ("{{1}}: {{2}}");
+// opciones.plantilla elige otra. Cada parámetro debe ir en una sola línea
+// (Meta rechaza saltos de línea, tabs o 5+ espacios: error 132018).
+async function enviarPlantilla(env, parametros, opciones = {}) {
   const template = {
     name: opciones.plantilla || env.WHATSAPP_TEMPLATE_NAME || 'recordatorio_clases',
     language: { code: opciones.idioma || env.WHATSAPP_TEMPLATE_LANG || 'es' },
@@ -105,10 +107,7 @@ async function enviarPlantilla(env, encabezado, cuerpo, opciones = {}) {
     template.components = [
       {
         type: 'body',
-        parameters: [
-          { type: 'text', text: encabezado },
-          { type: 'text', text: cuerpo },
-        ],
+        parameters: parametros.map((texto) => ({ type: 'text', text: String(texto) })),
       },
     ];
   }
@@ -273,7 +272,7 @@ async function verificarAlertaClase(env) {
 
     const enlace = await enlaceDeZoom(env, s.curso, s.inicio);
     const cuerpo = `${s.inicio}–${s.fin} ${s.curso} (${s.tipo})` + (enlace ? ` · Entra aquí: ${enlace}` : '');
-    await enviarPlantilla(env, '⏰ Empieza en 15 minutos', cuerpo);
+    await enviarPlantilla(env, ['⏰ Empieza en 15 minutos', cuerpo]);
     await env.HORARIO_KV.put(claveDedupe, '1', { expirationTtl: 60 * 60 * 24 });
   }
 }
@@ -300,6 +299,10 @@ async function enlaceDeZoom(env, curso, inicio) {
   }
 }
 
+// Plantilla Utility creada a mano en Meta Business Manager (ver README):
+// "Tu cuota {{1}} por S/ {{2}} vence {{3}}."
+const PLANTILLA_PAGO = 'recordatorio_pago';
+
 // Avisa cuando una cuota pendiente vence en 3 días o menos. Corre una vez
 // al día, junto con el resumen de las 07:00.
 async function verificarAlertaPago(env) {
@@ -325,7 +328,15 @@ async function verificarAlertaPago(env) {
     if (diffDias < 0 || diffDias > 3) continue;
 
     const cuando = diffDias === 0 ? 'hoy' : diffDias === 1 ? 'mañana' : `en ${diffDias} días`;
-    await enviarTexto(env, env.DESTINATARIO, `💰 Recordatorio: la cuota ${p.NroCuota} (S/ ${p.TotalText}) vence ${cuando} (${p.FecVenc}).`);
+    const resultado = await enviarPlantilla(env, [p.NroCuota, p.TotalText, `${cuando} (${p.FecVenc})`], {
+      plantilla: PLANTILLA_PAGO,
+    });
+    if (!resultado.enviado) {
+      // Mientras la plantilla no exista o siga en revisión en Meta, el
+      // rechazo es inmediato: se manda como antes, que llega si la ventana
+      // de 24 h está abierta.
+      await enviarTexto(env, env.DESTINATARIO, `💰 Recordatorio: la cuota ${p.NroCuota} (S/ ${p.TotalText}) vence ${cuando} (${p.FecVenc}).`);
+    }
   }
 }
 
